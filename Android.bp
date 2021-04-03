@@ -29,10 +29,6 @@ rust_library {
         "default",
         "std",
     ],
-    apex_available: [
-        "//apex_available:platform",
-        "com.android.virt",
-    ],
     rustlibs: [
         "libcfg_if",
         "liblog_rust",
@@ -49,4 +45,4 @@ rust_library {
 //   log-0.4.14 "std"
 //   managed-0.8.0 "alloc"
 //   num-traits-0.2.14
-//   paste-1.0.4
+//   paste-1.0.5
