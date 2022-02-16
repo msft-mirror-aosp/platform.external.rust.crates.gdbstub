@@ -73,28 +73,28 @@ impl<'a, T: Target, C: Connection> GdbStubBuilder<'a, T, C> {
 
     /// Build the GdbStub, returning an error if something went wrong.
     pub fn build(self) -> Result<GdbStub<'a, T, C>, GdbStubBuilderError> {
-        let packet_buffer = match self.packet_buffer {
+        let (packet_buffer, packet_buffer_len) = match self.packet_buffer {
             Some(buf) => {
-                let buf = match self.packet_buffer_size {
+                let len = match self.packet_buffer_size {
                     Some(custom_len) => {
                         if custom_len > buf.len() {
                             return Err(GdbStubBuilderError::PacketBufSizeMismatch);
                         } else {
-                            &mut buf[..custom_len]
+                            custom_len
                         }
                     }
-                    None => buf,
+                    None => buf.len(),
                 };
-                ManagedSlice::Borrowed(buf)
+                (ManagedSlice::Borrowed(buf), len)
             }
             None => {
                 cfg_if::cfg_if! {
                     if #[cfg(feature = "alloc")] {
-                        use alloc::vec;
+                        use alloc::vec::Vec;
                         // need to pick some arbitrary value to report to GDB
                         // 4096 seems reasonable?
                         let len = self.packet_buffer_size.unwrap_or(4096);
-                        ManagedSlice::Owned(vec![0; len])
+                        (ManagedSlice::Owned(Vec::with_capacity(len)), len)
                     } else {
                         return Err(GdbStubBuilderError::MissingPacketBuffer);
                     }
@@ -105,7 +105,7 @@ impl<'a, T: Target, C: Connection> GdbStubBuilder<'a, T, C> {
         Ok(GdbStub {
             conn: self.conn,
             packet_buffer,
-            state: GdbStubImpl::new(),
+            state: GdbStubImpl::new(packet_buffer_len),
         })
     }
 }
