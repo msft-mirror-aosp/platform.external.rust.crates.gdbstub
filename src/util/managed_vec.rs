@@ -5,6 +5,8 @@ use managed::ManagedSlice;
 pub struct CapacityError<Element>(pub Element);
 
 /// Wraps a ManagedSlice in a vec-like interface.
+///
+/// TODO?: Upstream ManagedVec into the main `managed` crate?
 pub struct ManagedVec<'a, 'b, T: 'a> {
     buf: &'b mut ManagedSlice<'a, T>,
     len: usize,
@@ -16,30 +18,29 @@ impl<'a, 'b, T> ManagedVec<'a, 'b, T> {
     }
 
     pub fn clear(&mut self) {
-        // While it's very tempting to just call `Vec::clear` in the `Owned` case, doing
-        // so would modify the length of the underlying `ManagedSlice`, which isn't
-        // desirable.
-        self.len = 0;
-    }
-
-    pub fn push(&mut self, value: T) -> Result<(), CapacityError<T>> {
-        if self.len < self.buf.len() {
-            self.buf[self.len] = value;
-            self.len += 1;
-            Ok(())
-        } else {
-            match &mut self.buf {
-                ManagedSlice::Borrowed(_) => Err(CapacityError(value)),
-                #[cfg(feature = "alloc")]
-                ManagedSlice::Owned(buf) => {
-                    buf.push(value);
-                    Ok(())
-                }
-            }
+        match &mut self.buf {
+            ManagedSlice::Borrowed(_) => self.len = 0,
+            #[cfg(feature = "alloc")]
+            ManagedSlice::Owned(buf) => buf.clear(),
         }
     }
 
-    pub fn as_slice<'c: 'b>(&'c self) -> &'b [T] {
-        &self.buf[..self.len]
+    pub fn push(&mut self, value: T) -> Result<(), CapacityError<T>> {
+        match &mut self.buf {
+            ManagedSlice::Borrowed(buf) => {
+                if self.len < buf.len() {
+                    buf[self.len] = value;
+                    self.len += 1;
+                    Ok(())
+                } else {
+                    Err(CapacityError(value))
+                }
+            }
+            #[cfg(feature = "alloc")]
+            ManagedSlice::Owned(buf) => {
+                buf.push(value);
+                Ok(())
+            }
+        }
     }
 }
