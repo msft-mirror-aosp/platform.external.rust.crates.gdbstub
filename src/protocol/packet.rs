@@ -1,5 +1,4 @@
-use crate::protocol::commands::Command;
-use crate::protocol::common::hex::decode_hex;
+use crate::protocol::{commands::Command, common::decode_hex};
 use crate::target::Target;
 
 /// Packet parse error.
@@ -10,7 +9,7 @@ pub enum PacketParseError {
     MissingChecksum,
     MalformedChecksum,
     MalformedCommand,
-    NotAscii,
+    NotASCII,
     UnexpectedHeader(u8),
 }
 
@@ -31,24 +30,20 @@ impl<'a> PacketBuf<'a> {
     /// Validate the contents of the raw packet buffer, checking for checksum
     /// consistency, structural correctness, and ASCII validation.
     pub fn new(pkt_buf: &'a mut [u8]) -> Result<PacketBuf<'a>, PacketParseError> {
-        if pkt_buf.is_empty() {
-            return Err(PacketParseError::EmptyBuf);
+        // validate the packet is valid ASCII
+        if !pkt_buf.is_ascii() {
+            return Err(PacketParseError::NotASCII);
         }
+
+        let end_of_body = pkt_buf
+            .iter()
+            .position(|b| *b == b'#')
+            .ok_or(PacketParseError::MissingChecksum)?;
 
         // split buffer into body and checksum components
-        let mut parts = pkt_buf[1..].split(|b| *b == b'#');
-
-        let body = parts.next().unwrap(); // spit iter always returns at least one elem
-        let checksum = parts
-            .next()
-            .ok_or(PacketParseError::MissingChecksum)?
-            .get(..2)
-            .ok_or(PacketParseError::MalformedChecksum)?;
-
-        // validate that the body is valid ASCII
-        if !body.is_ascii() {
-            return Err(PacketParseError::NotAscii);
-        }
+        let (body, checksum) = pkt_buf.split_at_mut(end_of_body);
+        let body = &mut body[1..]; // skip the '$'
+        let checksum = &mut checksum[1..][..2]; // skip the '#'
 
         // validate the checksum
         let checksum = decode_hex(checksum).map_err(|_| PacketParseError::MalformedChecksum)?;
@@ -60,7 +55,11 @@ impl<'a> PacketBuf<'a> {
             });
         }
 
-        let end_of_body = 1 + body.len();
+        if log_enabled!(log::Level::Trace) {
+            // SAFETY: body confirmed to be `is_ascii()`
+            let body = unsafe { core::str::from_utf8_unchecked(body) };
+            trace!("<-- ${}#{:02x?}", body, checksum);
+        }
 
         Ok(PacketBuf {
             buf: pkt_buf,
@@ -74,7 +73,7 @@ impl<'a> PacketBuf<'a> {
     pub fn new_with_raw_body(body: &'a mut [u8]) -> Result<PacketBuf<'a>, PacketParseError> {
         // validate the packet is valid ASCII
         if !body.is_ascii() {
-            return Err(PacketParseError::NotAscii);
+            return Err(PacketParseError::NotASCII);
         }
 
         let len = body.len();
@@ -84,13 +83,15 @@ impl<'a> PacketBuf<'a> {
         })
     }
 
-    pub fn strip_prefix(&mut self, prefix: &[u8]) -> bool {
-        if self.buf[self.body_range.clone()].starts_with(prefix) {
-            self.body_range = (self.body_range.start + prefix.len())..self.body_range.end;
-            true
-        } else {
-            false
+    pub fn trim_start_body_bytes(self, n: usize) -> Self {
+        PacketBuf {
+            buf: self.buf,
+            body_range: (self.body_range.start + n)..self.body_range.end,
         }
+    }
+
+    pub fn as_body(&'a self) -> &'a [u8] {
+        &self.buf[self.body_range.clone()]
     }
 
     /// Return a mut reference to slice of the packet buffer corresponding to
@@ -99,18 +100,17 @@ impl<'a> PacketBuf<'a> {
         &mut self.buf[self.body_range]
     }
 
-    /// Return a mut reference to the _entire_ underlying packet buffer, and the
-    /// current body's range.
-    pub fn into_raw_buf(self) -> (&'a mut [u8], core::ops::Range<usize>) {
-        (self.buf, self.body_range)
+    pub fn into_body_str(self) -> &'a str {
+        // SAFETY: buffer confirmed to be `is_ascii()` in `new`, and no other PacketBuf
+        // member allow arbitrary modification of `self.buf`.
+        unsafe { core::str::from_utf8_unchecked(&self.buf[self.body_range]) }
     }
 
-    /// Returns the length of the _entire_ underlying packet buffer - not just
-    /// the length of the current range.
-    ///
-    /// This method is used when handing the `qSupported` packet.
-    pub fn full_len(&self) -> usize {
-        self.buf.len()
+    /// Return a mut reference to the _entire_ underlying packet buffer, and the
+    /// current body's range.
+    #[allow(dead_code)]
+    pub fn into_raw_buf(self) -> (&'a mut [u8], core::ops::Range<usize>) {
+        (self.buf, self.body_range)
     }
 }
 
@@ -127,7 +127,8 @@ impl<'a> Packet<'a> {
         match buf[0] {
             b'$' => Ok(Packet::Command(
                 Command::from_packet(target, PacketBuf::new(buf)?)
-                    .ok_or(PacketParseError::MalformedCommand)?,
+                    // TODO?: preserve command parse error context
+                    .map_err(|_| PacketParseError::MalformedCommand)?,
             )),
             b'+' => Ok(Packet::Ack),
             b'-' => Ok(Packet::Nack),
