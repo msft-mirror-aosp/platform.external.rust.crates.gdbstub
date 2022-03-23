@@ -71,10 +71,7 @@ fn main() -> DynResult<()> {
             // run to completion
             while emu.step() != Some((emu::Event::Halted, emu::CpuId::Cpu)) {}
         }
-        DisconnectReason::TargetExited(code) => println!("Target exited with code {}!", code),
-        DisconnectReason::TargetTerminated(sig) => {
-            println!("Target terminated with signal {}!", sig)
-        }
+        DisconnectReason::TargetHalted => println!("Target halted!"),
         DisconnectReason::Kill => {
             println!("GDB sent a kill command!");
             return Ok(());

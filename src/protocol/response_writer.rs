@@ -1,31 +1,29 @@
+#[cfg(feature = "alloc")]
+use alloc::string::String;
+
 use num_traits::PrimInt;
 
 use crate::internal::BeBytes;
-use crate::protocol::{SpecificIdKind, SpecificThreadId};
+use crate::protocol::{IdKind, ThreadId};
 use crate::Connection;
 
 /// Newtype around a Connection error. Having a newtype allows implementing a
 /// `From<ResponseWriterError<C>> for crate::Error<T, C>`, which greatly
 /// simplifies some of the error handling in the main gdbstub.
 #[derive(Debug, Clone)]
-pub struct Error<C>(pub C);
+pub struct Error<C>(C);
 
 /// A wrapper around [`Connection`] that computes the single-byte checksum of
 /// incoming / outgoing data.
 pub struct ResponseWriter<'a, C: Connection + 'a> {
-    // TODO: add `write_all` method to Connection, and allow user to optionally pass outgoing
-    // packet buffer? This could improve performance (instead of writing a single byte at a time)
     inner: &'a mut C,
     started: bool,
     checksum: u8,
-    // TODO?: Make using RLE configurable by the target?
-    // if implemented correctly, targets that disable RLE entirely could have all RLE code
-    // dead-code-eliminated.
-    rle_char: u8,
-    rle_repeat: u8,
-    // buffer to log outgoing packets. only allocates if logging is enabled.
-    #[cfg(feature = "std")]
-    msg: Vec<u8>,
+    // buffer outgoing message
+    // TODO: add `write_all` method to Connection, and allow user to optionally pass outgoing
+    // packet buffer? This could improve performance (instead of writing a single byte at a time)
+    #[cfg(feature = "alloc")]
+    msg: String,
 }
 
 impl<'a, C: Connection + 'a> ResponseWriter<'a, C> {
@@ -35,34 +33,21 @@ impl<'a, C: Connection + 'a> ResponseWriter<'a, C> {
             inner,
             started: false,
             checksum: 0,
-            rle_char: 0,
-            rle_repeat: 0,
-            #[cfg(feature = "std")]
-            msg: Vec::new(),
+            #[cfg(feature = "alloc")]
+            msg: String::new(),
         }
     }
 
     /// Consumes self, writing out the final '#' and checksum
     pub fn flush(mut self) -> Result<(), Error<C::Error>> {
-        self.write(b'#')?;
-
-        // don't include the '#' in checksum calculation
-        // (note: even though `self.write` was called, the the '#' char hasn't been
-        // added to the checksum, and is just sitting in the RLE buffer)
+        // don't include '#' in checksum calculation
         let checksum = self.checksum;
 
-        #[cfg(feature = "std")]
-        trace!(
-            "--> ${}#{:02x?}",
-            core::str::from_utf8(&self.msg).unwrap(), // buffers are always ascii
-            checksum
-        );
+        #[cfg(feature = "alloc")]
+        trace!("--> ${}#{:02x?}", self.msg, checksum);
 
+        self.write(b'#')?;
         self.write_hex(checksum)?;
-        // HACK: "write" a dummy char to force an RLE flush
-        self.write(0)?;
-
-        self.inner.flush().map_err(Error)?;
 
         Ok(())
     }
@@ -72,20 +57,10 @@ impl<'a, C: Connection + 'a> ResponseWriter<'a, C> {
         self.inner
     }
 
-    fn inner_write(&mut self, byte: u8) -> Result<(), Error<C::Error>> {
-        #[cfg(feature = "std")]
-        if log_enabled!(log::Level::Trace) {
-            match self.msg.as_slice() {
-                [.., c, b'*'] => {
-                    let c = *c;
-                    self.msg.pop();
-                    for _ in 0..(byte - 29) {
-                        self.msg.push(c);
-                    }
-                }
-                _ => self.msg.push(byte),
-            }
-        }
+    /// Write a single byte.
+    pub fn write(&mut self, byte: u8) -> Result<(), Error<C::Error>> {
+        #[cfg(feature = "alloc")]
+        self.msg.push(byte as char);
 
         if !self.started {
             self.started = true;
@@ -96,53 +71,14 @@ impl<'a, C: Connection + 'a> ResponseWriter<'a, C> {
         self.inner.write(byte).map_err(Error)
     }
 
-    fn write(&mut self, byte: u8) -> Result<(), Error<C::Error>> {
-        const ASCII_FIRST_PRINT: u8 = b' ';
-        const ASCII_LAST_PRINT: u8 = b'~';
-
-        // handle RLE
-        let rle_printable = (ASCII_FIRST_PRINT - 4 + (self.rle_repeat + 1)) <= ASCII_LAST_PRINT;
-        if byte == self.rle_char && rle_printable {
-            self.rle_repeat += 1;
-            Ok(())
-        } else {
-            loop {
-                match self.rle_repeat {
-                    0 => {} // happens once, after the first char is written
-                    // RLE doesn't win, just output the byte
-                    1 | 2 | 3 => {
-                        for _ in 0..self.rle_repeat {
-                            self.inner_write(self.rle_char)?
-                        }
-                    }
-                    // RLE would output an invalid char ('#' or '$')
-                    6 | 7 => {
-                        self.inner_write(self.rle_char)?;
-                        self.rle_repeat -= 1;
-                        continue;
-                    }
-                    // RLE wins for repetitions >4
-                    _ => {
-                        self.inner_write(self.rle_char)?;
-                        self.inner_write(b'*')?;
-                        self.inner_write(ASCII_FIRST_PRINT - 4 + self.rle_repeat)?;
-                    }
-                }
-
-                self.rle_char = byte;
-                self.rle_repeat = 1;
-
-                break Ok(());
-            }
-        }
+    /// Write an entire buffer over the connection.
+    pub fn write_all(&mut self, data: &[u8]) -> Result<(), Error<C::Error>> {
+        data.iter().try_for_each(|b| self.write(*b))
     }
 
     /// Write an entire string over the connection.
-    pub fn write_str(&mut self, s: &'static str) -> Result<(), Error<C::Error>> {
-        for b in s.as_bytes().iter() {
-            self.write(*b)?;
-        }
-        Ok(())
+    pub fn write_str(&mut self, s: &str) -> Result<(), Error<C::Error>> {
+        self.write_all(&s.as_bytes())
     }
 
     /// Write a single byte as a hex string (two ascii chars)
@@ -160,24 +96,18 @@ impl<'a, C: Connection + 'a> ResponseWriter<'a, C> {
 
     /// Write a byte-buffer as a hex string (i.e: two ascii chars / byte).
     pub fn write_hex_buf(&mut self, data: &[u8]) -> Result<(), Error<C::Error>> {
-        for b in data.iter() {
-            self.write_hex(*b)?;
-        }
-        Ok(())
+        data.iter().try_for_each(|b| self.write_hex(*b))
     }
 
     /// Write data using the binary protocol.
     pub fn write_binary(&mut self, data: &[u8]) -> Result<(), Error<C::Error>> {
-        for &b in data.iter() {
-            match b {
-                b'#' | b'$' | b'}' | b'*' => {
-                    self.write(b'}')?;
-                    self.write(b ^ 0x20)?
-                }
-                _ => self.write(b)?,
+        data.iter().try_for_each(|b| match b {
+            b'#' | b'$' | b'}' | b'*' => {
+                self.write(b'}')?;
+                self.write(*b ^ 0x20)
             }
-        }
-        Ok(())
+            _ => self.write(*b),
+        })
     }
 
     /// Write a number as a big-endian hex string using the most compact
@@ -191,30 +121,28 @@ impl<'a, C: Connection + 'a> ResponseWriter<'a, C> {
         // infallible (unless digit is a >128 bit number)
         let len = digit.to_be_bytes(&mut buf).unwrap();
         let buf = &buf[..len];
-        for b in buf.iter().copied().skip_while(|&b| b == 0) {
-            self.write_hex(b)?
-        }
-        Ok(())
+        buf.iter()
+            .copied()
+            .skip_while(|&b| b == 0)
+            .try_for_each(|b| self.write_hex(b))
     }
 
-    fn write_specific_id_kind(&mut self, tid: SpecificIdKind) -> Result<(), Error<C::Error>> {
+    pub fn write_id_kind(&mut self, tid: IdKind) -> Result<(), Error<C::Error>> {
         match tid {
-            SpecificIdKind::All => self.write_str("-1")?,
-            SpecificIdKind::WithId(id) => self.write_num(id.get())?,
+            IdKind::All => self.write_str("-1")?,
+            IdKind::Any => self.write_str("0")?,
+            IdKind::WithID(id) => self.write_num(id.get())?,
         };
         Ok(())
     }
 
-    pub fn write_specific_thread_id(
-        &mut self,
-        tid: SpecificThreadId,
-    ) -> Result<(), Error<C::Error>> {
+    pub fn write_thread_id(&mut self, tid: ThreadId) -> Result<(), Error<C::Error>> {
         if let Some(pid) = tid.pid {
             self.write_str("p")?;
-            self.write_specific_id_kind(pid)?;
+            self.write_id_kind(pid)?;
             self.write_str(".")?;
         }
-        self.write_specific_id_kind(tid.tid)?;
+        self.write_id_kind(tid.tid)?;
         Ok(())
     }
 }
