@@ -3,7 +3,5 @@
 Cargo.lock
 
 **/.gdb_history
-# The GDB client may core dump if the target is implemented incorrectly
+# GDB will core dump if the target is implemented incorrectly (which it often is during debugging)
 **/core
-
-.vscode
