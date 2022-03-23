@@ -63,7 +63,6 @@ impl Emu {
             start_addr: elf_header.entry as u32,
             cpu,
             mem,
-
             watchpoints: Vec::new(),
             breakpoints: Vec::new(),
         })
