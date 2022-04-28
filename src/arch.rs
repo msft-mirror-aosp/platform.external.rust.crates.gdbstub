@@ -16,6 +16,7 @@
 //! crate helps minimize any unnecessary "version churn" in `gdbstub` core.
 
 use core::fmt::Debug;
+use core::num::NonZeroUsize;
 
 use num_traits::{FromPrimitive, PrimInt, Unsigned};
 
@@ -26,17 +27,23 @@ use crate::internal::{BeBytes, LeBytes};
 /// These identifiers are used by GDB to signal which register to read/wite when
 /// performing [single register accesses].
 ///
-/// [single register accesses]: crate::target::ext::base::SingleRegisterAccess
+/// [single register accesses]:
+/// crate::target::ext::base::single_register_access::SingleRegisterAccess
 pub trait RegId: Sized + Debug {
-    /// Map raw GDB register number corresponding `RegId` and register size.
+    /// Map raw GDB register number to a corresponding `RegId` and optional
+    /// register size.
+    ///
+    /// If the register size is specified here, gdbstub will include a runtime
+    /// check that ensures target implementations do not send back more
+    /// bytes than the register allows.
     ///
     /// Returns `None` if the register is not available.
-    fn from_raw_id(id: usize) -> Option<(Self, usize)>;
+    fn from_raw_id(id: usize) -> Option<(Self, Option<NonZeroUsize>)>;
 }
 
 /// Stub implementation -- Returns `None` for all raw IDs.
 impl RegId for () {
-    fn from_raw_id(_id: usize) -> Option<(Self, usize)> {
+    fn from_raw_id(_id: usize) -> Option<(Self, Option<NonZeroUsize>)> {
         None
     }
 }
@@ -113,7 +120,7 @@ impl BreakpointKind for usize {
 /// explicitly instantiated.
 pub trait Arch {
     /// The architecture's pointer size (e.g: `u32` on a 32-bit system).
-    type Usize: FromPrimitive + PrimInt + Unsigned + BeBytes + LeBytes;
+    type Usize: Debug + FromPrimitive + PrimInt + Unsigned + BeBytes + LeBytes;
 
     /// The architecture's register file. See [`Registers`] for more details.
     type Registers: Registers<ProgramCounter = Self::Usize>;
@@ -147,7 +154,104 @@ pub trait Arch {
     ///
     /// See the [GDB docs](https://sourceware.org/gdb/current/onlinedocs/gdb/Target-Description-Format.html)
     /// for details on the target description XML format.
+    #[inline(always)]
     fn target_description_xml() -> Option<&'static str> {
         None
     }
+
+    /// Encode how the mainline GDB client handles target support for
+    /// single-step on this particular architecture.
+    ///
+    /// # Context
+    ///
+    /// According to the spec, supporting single step _should_ be quite
+    /// straightforward:
+    ///
+    /// - The GDB client sends a `vCont?` packet to enumerate supported
+    ///   resumption modes
+    /// - If the target supports single-step, it responds with the `s;S`
+    ///   capability as part of the response, omitting it if it is not
+    ///   supported.
+    /// - Later, when the user attempts to `stepi`, the GDB client sends a `s`
+    ///   resumption reason if it is supported, falling back to setting a
+    ///   temporary breakpoint + continue to "emulate" the single step.
+    ///
+    /// Unfortunately, the reality is that the mainline GDB client does _not_ do
+    /// this on all architectures...
+    ///
+    /// - On certain architectures (e.g: x86), GDB will _unconditionally_ assume
+    ///   single-step support, regardless whether or not the target reports
+    ///   supports it.
+    /// - On certain architectures (e.g: MIPS), GDB will _never_ use single-step
+    ///   support, even in the target has explicitly reported support for it.
+    ///
+    /// This is a bug, and has been reported at
+    /// <https://sourceware.org/bugzilla/show_bug.cgi?id=28440>.
+    ///
+    /// For a easy repro of this behavior, also see
+    /// <https://github.com/daniel5151/gdb-optional-step-bug>.
+    ///
+    /// # Implications
+    ///
+    /// Unfortunately, even if these idiosyncratic behaviors get fixed in the
+    /// mainline GDB client, it will be quite a while until the typical
+    /// user's distro-provided GDB client includes this bugfix.
+    ///
+    /// As such, `gdbstub` has opted to include this method as a "guard rail" to
+    /// preemptively detect cases of this idiosyncratic behavior, and throw a
+    /// pre-init error that informs the user of the potential issues they may
+    /// run into.
+    ///
+    /// # Writing a proper implementation
+    ///
+    /// To check whether or not a particular architecture exhibits this
+    /// behavior, an implementation should temporarily override this method to
+    /// return [`SingleStepGdbBehavior::Optional`], toggle target support for
+    /// single-step on/off, and observe the behavior of the GDB client after
+    /// invoking `stepi`.
+    ///
+    /// If single-stepping was **disabled**, yet the client nonetheless sent a
+    /// `vCont` packet with a `s` resume action, then this architecture
+    /// _does not_ support optional single stepping, and this method should
+    /// return [`SingleStepGdbBehavior::Required`].
+    ///
+    /// If single-stepping was **disabled**, and the client attempted to set a
+    /// temporary breakpoint (using the `z` packet), and then sent a `vCont`
+    /// packet with a `c` resume action, then this architecture _does_
+    /// support optional single stepping, and this method should return
+    /// [`SingleStepGdbBehavior::Optional`].
+    ///
+    /// If single-stepping was **enabled**, yet the client did _not_ send a
+    /// `vCont` packet with a `s` resume action, then this architecture
+    /// _ignores_ single stepping entirely, and this method should return
+    /// [`SingleStepGdbBehavior::Ignored`].
+    fn single_step_gdb_behavior() -> SingleStepGdbBehavior;
+}
+
+/// Encodes how the mainline GDB client handles target support for single-step
+/// on a particular architecture.
+///
+/// See [Arch::single_step_gdb_behavior] for details.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub enum SingleStepGdbBehavior {
+    /// GDB will use single-stepping if available, falling back to using
+    /// a temporary breakpoint + continue if unsupported.
+    ///
+    /// e.g: ARM
+    Optional,
+    /// GDB will unconditionally send single-step packets, _requiring_ the
+    /// target to handle these requests.
+    ///
+    /// e.g: x86/x64
+    Required,
+    /// GDB will never use single-stepping, regardless if it's supported by the
+    /// stub. It will always use a temporary breakpoint + continue.
+    ///
+    /// e.g: MIPS
+    Ignored,
+    /// Unknown behavior - no one has tested this platform yet. If possible,
+    /// please conduct a test + upstream your findings to `gdbstub_arch`.
+    #[doc(hidden)]
+    Unknown,
 }
