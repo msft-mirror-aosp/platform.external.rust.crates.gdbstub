@@ -1,9 +1,15 @@
+//! GDB protocol internals.
+//!
+//! These types should _not_ leak into the public interface (with a few
+//! exceptions, as listed below).
+
 mod common;
 mod console_output;
 mod packet;
 mod response_writer;
 
 pub(crate) mod commands;
+pub(crate) mod recv_packet;
 
 pub(crate) use common::thread_id::{IdKind, SpecificIdKind, SpecificThreadId};
 pub(crate) use packet::Packet;
