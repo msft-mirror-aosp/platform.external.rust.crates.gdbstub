@@ -71,6 +71,10 @@ pub trait MultiThreadBase: Target {
     ///
     /// See [the section above](#bare-metal-targets) on implementing
     /// thread-related methods on bare-metal (threadless) targets.
+    ///
+    /// _Note_: Implementors should mark this method as `#[inline(always)]`, as
+    /// this will result in better codegen (namely, by sidestepping any of the
+    /// `dyn FnMut` closure machinery).
     fn list_active_threads(
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid),
@@ -82,6 +86,7 @@ pub trait MultiThreadBase: Target {
     /// uses `list_active_threads` to do a linear-search through all active
     /// threads. On thread-heavy systems, it may be more efficient
     /// to override this method with a more direct query.
+    #[allow(clippy::wrong_self_convention)] // requires breaking change to fix
     fn is_thread_alive(&mut self, tid: Tid) -> Result<bool, Self::Error> {
         let mut found = false;
         self.list_active_threads(&mut |active_tid| {
@@ -95,6 +100,14 @@ pub trait MultiThreadBase: Target {
     /// Support for resuming the target (e.g: via `continue` or `step`)
     #[inline(always)]
     fn support_resume(&mut self) -> Option<MultiThreadResumeOps<'_, Self>> {
+        None
+    }
+
+    /// Support for providing thread extra information.
+    #[inline(always)]
+    fn support_thread_extra_info(
+        &mut self,
+    ) -> Option<crate::target::ext::thread_extra_info::ThreadExtraInfoOps<'_, Self>> {
         None
     }
 }
