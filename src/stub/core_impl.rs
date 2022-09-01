@@ -28,6 +28,7 @@ mod catch_syscalls;
 mod exec_file;
 mod extended_mode;
 mod host_io;
+mod lldb_register_info;
 mod memory_map;
 mod monitor_cmd;
 mod resume;
@@ -35,6 +36,7 @@ mod reverse_exec;
 mod section_offsets;
 mod single_register_access;
 mod target_xml;
+mod thread_extra_info;
 mod x_upcase_packet;
 
 pub(crate) use resume::FinishExecStatus;
@@ -207,6 +209,8 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
             Command::HostIo(cmd) => self.handle_host_io(res, target, cmd),
             Command::ExecFile(cmd) => self.handle_exec_file(res, target, cmd),
             Command::Auxv(cmd) => self.handle_auxv(res, target, cmd),
+            Command::ThreadExtraInfo(cmd) => self.handle_thread_extra_info(res, target, cmd),
+            Command::LldbRegisterInfo(cmd) => self.handle_lldb_register_info(res, target, cmd),
             // in the worst case, the command could not be parsed...
             Command::Unknown(cmd) => {
                 // HACK: if the user accidentally sends a resume command to a
@@ -214,7 +218,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                 // return a dummy stop reason.
                 if target.base_ops().resume_ops().is_none() && target.use_resume_stub() {
                     let is_resume_pkt = cmd
-                        .get(0)
+                        .first()
                         .map(|c| matches!(c, b'c' | b'C' | b's' | b'S'))
                         .unwrap_or(false);
 
