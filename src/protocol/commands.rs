@@ -51,7 +51,7 @@ macro_rules! commands {
 
         pub mod ext {
             $(
-                #[allow(non_camel_case_types)]
+                #[allow(non_camel_case_types, clippy::enum_variant_names)]
                 pub enum [<$ext:camel>] $(<$lt>)? {
                     $($command(super::$mod::$command<$($lifetime)?>),)*
                 }
@@ -87,11 +87,13 @@ macro_rules! commands {
                 trait Hack {
                     fn support_base(&mut self) -> Option<()>;
                     fn support_target_xml(&mut self) -> Option<()>;
+                    fn support_lldb_register_info(&mut self) -> Option<()>;
                     fn support_resume(&mut self) -> Option<()>;
                     fn support_single_register_access(&mut self) -> Option<()>;
                     fn support_reverse_step(&mut self) -> Option<()>;
                     fn support_reverse_cont(&mut self) -> Option<()>;
                     fn support_x_upcase_packet(&mut self) -> Option<()>;
+                    fn support_thread_extra_info(&mut self) -> Option<()>;
                 }
 
                 impl<T: Target> Hack for T {
@@ -110,6 +112,18 @@ macro_rules! commands {
                             None
                         }
                     }
+
+                    fn support_lldb_register_info(&mut self) -> Option<()> {
+                        use crate::arch::Arch;
+			            if self.use_lldb_register_info()
+                            && (T::Arch::lldb_register_info(usize::max_value()).is_some()
+                                || self.support_lldb_register_info_override().is_some())
+                        {
+                            Some(())
+                        } else {
+                            None
+                        }
+		    }
 
                     fn support_resume(&mut self) -> Option<()> {
                         self.base_ops().resume_ops().map(drop)
@@ -144,6 +158,14 @@ macro_rules! commands {
                             Some(())
                         } else {
                             None
+                        }
+                    }
+
+                    fn support_thread_extra_info(&mut self) -> Option<()> {
+                        use crate::target::ext::base::BaseOps;
+                        match self.base_ops() {
+                            BaseOps::SingleThread(_) => None,
+                            BaseOps::MultiThread(ops) => ops.support_thread_extra_info().map(drop),
                         }
                     }
                 }
@@ -287,5 +309,13 @@ commands! {
 
     catch_syscalls use 'a {
         "QCatchSyscalls" => _QCatchSyscalls::QCatchSyscalls<'a>,
+    }
+
+    thread_extra_info use 'a {
+        "qThreadExtraInfo" => _qThreadExtraInfo::qThreadExtraInfo<'a>,
+    }
+
+    lldb_register_info {
+        "qRegisterInfo" => _qRegisterInfo::qRegisterInfo,
     }
 }
