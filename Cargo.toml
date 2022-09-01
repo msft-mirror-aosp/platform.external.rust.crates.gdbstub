@@ -12,15 +12,29 @@
 [package]
 edition = "2018"
 name = "gdbstub"
-version = "0.6.1"
+version = "0.6.3"
 authors = ["Daniel Prilik <danielprilik@gmail.com>"]
-exclude = ["examples/**/*.elf", "examples/**/*.o"]
+exclude = [
+    "examples/**/*.elf",
+    "examples/**/*.o",
+]
 description = "An implementation of the GDB Remote Serial Protocol in Rust"
 homepage = "https://github.com/daniel5151/gdbstub"
 documentation = "https://docs.rs/gdbstub"
 readme = "README.md"
-keywords = ["gdb", "emulation", "no_std", "debugging"]
-categories = ["development-tools::debugging", "embedded", "emulators", "network-programming", "no-std"]
+keywords = [
+    "gdb",
+    "emulation",
+    "no_std",
+    "debugging",
+]
+categories = [
+    "development-tools::debugging",
+    "embedded",
+    "emulators",
+    "network-programming",
+    "no-std",
+]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/daniel5151/gdbstub"
 
@@ -31,6 +45,7 @@ required-features = ["std"]
 [[example]]
 name = "armv4t_multicore"
 required-features = ["std"]
+
 [dependencies.bitflags]
 version = "1.3"
 
@@ -50,6 +65,7 @@ default-features = false
 
 [dependencies.paste]
 version = "1.0"
+
 [dev-dependencies.armv4t_emu]
 version = "0.1"
 
@@ -62,7 +78,10 @@ version = "0.4"
 [features]
 __dead_code_marker = []
 alloc = ["managed/alloc"]
-default = ["std", "trace-pkt"]
+default = [
+    "std",
+    "trace-pkt",
+]
 paranoid_unsafe = []
 std = ["alloc"]
 trace-pkt = ["alloc"]

@@ -9,6 +9,7 @@ pub struct m<'a> {
 }
 
 impl<'a> ParseCommand<'a> for m<'a> {
+    #[inline(always)]
     fn from_packet(buf: PacketBuf<'a>) -> Option<Self> {
         // the total packet buffer currently looks like:
         //
@@ -36,8 +37,6 @@ impl<'a> ParseCommand<'a> for m<'a> {
         let addr = decode_hex_buf(body.next()?).ok()?;
         let addr_len = addr.len();
         let len = decode_hex(body.next()?).ok()?;
-
-        drop(body);
 
         // ensures that `split_at_mut` doesn't panic
         if buf.len() < body_range.start + addr_len {
