@@ -31,9 +31,8 @@ Why use `gdbstub`?
 -   **`#![no_std]` Ready & Size Optimized**
     -   `gdbstub` is a **`no_std` first** library, whereby all protocol features are required to be `no_std` compatible.
     -   `gdbstub` does not require _any_ dynamic memory allocation, and can be configured to use fixed-size, pre-allocated buffers. This enables `gdbstub` to be used on even the most resource constrained, no-[`alloc`](https://doc.rust-lang.org/alloc/) platforms.
-    -   `gdbstub` is entirely **panic free** in most minimal configurations\*
-        -   \*when compiled in release mode, without the `paranoid_unsafe` cargo feature, on certain platforms.
-        -   Validated by inspecting the asm output of the in-tree `example_no_std`.
+    -   `gdbstub` is entirely **panic free** in most minimal configurations\*, resulting in substantially smaller and more robust code.
+        -   \*See the [Writing panic-free code](#writing-panic-free-code) section below for more details.
     -   `gdbstub` is transport-layer agnostic, and uses a basic [`Connection`](https://docs.rs/gdbstub/latest/gdbstub/conn/trait.Connection.html) interface to communicate with the GDB server. As long as target has some method of performing in-order, serial, byte-wise I/O (e.g: putchar/getchar over UART), it's possible to run `gdbstub` on it!
     -   "You don't pay for what you don't use": All code related to parsing/handling protocol extensions is guaranteed to be dead-code-eliminated from an optimized binary if left unimplemented. See the [Zero-overhead Protocol Extensions](#zero-overhead-protocol-extensions) section below for more details.
     -   `gdbstub`'s minimal configuration has an incredibly low binary size + RAM overhead, enabling it to be used on even the most resource-constrained microcontrollers.
@@ -88,6 +87,7 @@ Of course, most use-cases will want to support additional debugging features as 
     -   Access the remote target's filesystem to read/write file
     -   Can be used to automatically read the remote executable on attach (using `ExecFile`)
 -   Read auxiliary vector (`info auxv`)
+-   Extra thread info (`info threads`)
 
 _Note:_ GDB features are implemented on an as-needed basis by `gdbstub`'s contributors. If there's a missing GDB feature that you'd like `gdbstub` to implement, please file an issue and/or open a PR!
 
@@ -124,25 +124,29 @@ When using `gdbstub` in `#![no_std]` contexts, make sure to set `default-feature
 
 ### Real-World Examples
 
+While some of these projects may use older versions of `gdbstub`, they can nonetheless serve as useful examples of what a typical `gdbstub` integration might look like.
+
+If you end up using `gdbstub` in your project, consider opening a PR and adding it to this list!
+
 -   Virtual Machine Monitors (VMMs)
-    -   [crosvm](https://google.github.io/crosvm/running_crosvm/usage.html#gdb-support) - The Chrome OS Virtual Machine Monitor (x64)
-    -   [Firecracker](https://firecracker-microvm.github.io/) - A lightweight VMM developed by AWS - feature is in [PR](https://github.com/firecracker-microvm/firecracker/pull/2333)
+    -   [crosvm](https://google.github.io/crosvm/running_crosvm/advanced_usage.html#gdb-support) - The Chrome OS VMM
+    -   [cloud-hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) - A VMM for modern cloud workloads
+    -   [Firecracker](https://firecracker-microvm.github.io/) - A lightweight VMM developed by AWS (feature is in [PR](https://github.com/firecracker-microvm/firecracker/pull/2333))
     -   [uhyve](https://github.com/hermitcore/uhyve) - A minimal hypervisor for [RustyHermit](https://github.com/hermitcore/rusty-hermit)
 -   OS Kernels (using `gdbstub` on `no_std`)
     -   [`vmware-labs/node-replicated-kernel`](https://github.com/vmware-labs/node-replicated-kernel/tree/4326704/kernel/src/arch/x86_64/gdb) - An (experimental) research OS kernel for x86-64 (amd64) machines
     -   [`betrusted-io/xous-core`](https://github.com/betrusted-io/xous-core/blob/7d3d710/kernel/src/debug/gdb_server.rs) - The Xous microkernel operating system
--   Emulators (x64)
-    -   [clicky](https://github.com/daniel5151/clicky/) - An emulator for classic clickwheel iPods (dual-core ARMv4T SoC)
-    -   [rustyboyadvance-ng](https://github.com/michelhe/rustboyadvance-ng/) - Nintendo GameBoy Advance emulator and debugger (ARMv4T)
+-   Emulators
+    -   [bevy-atari](https://github.com/mrk-its/bevy-atari) - An Atari XL/XE Emulator (MOS 6502)
+    -   [rmips](https://github.com/starfleetcadet75/rmips) - MIPS R3000 virtual machine simulator
+    -   [clicky](https://github.com/daniel5151/clicky/) - Emulator for classic clickwheel iPods (dual-core ARMv4T)
+    -   [ts7200](https://github.com/daniel5151/ts7200/) - Emulator for the TS-7200 SoC (ARMv4T)
     -   [vaporstation](https://github.com/Colin-Suckow/vaporstation) - A Playstation One emulator (MIPS)
-    -   [ts7200](https://github.com/daniel5151/ts7200/) - An emulator for the TS-7200, a somewhat bespoke embedded ARMv4t platform
-    -   [microcorruption-emu](https://github.com/sapir/microcorruption-emu) - msp430 emulator for the microcorruption.com ctf
+    -   [rustyboyadvance-ng](https://github.com/michelhe/rustboyadvance-ng/) - Nintendo GameBoy Advance emulator and debugger (ARMv4T)
+    -   [microcorruption-emu](https://github.com/sapir/microcorruption-emu) - Emulator for the microcorruption.com ctf (MSP430)
 -   Other
-    -   [memflow](https://github.com/memflow/memflow-cli) - A physical memory introspection framework (part of `memflow-cli`)
-
-While some of these projects may use older versions of `gdbstub`, they can nonetheless serve as useful examples of what a typical `gdbstub` integration might look like.
-
-If you end up using `gdbstub` in your project, consider opening a PR and adding it to this list!
+    -   [udbserver](https://github.com/bet4it/udbserver) - Plug-in GDB debugging for the [Unicorn Engine](https://www.unicorn-engine.org/) (Multi Architecture)
+    -   [enarx](https://github.com/enarx/enarx) - An open source framework for running applications in Trusted Execution Environments
 
 ### In-tree "Toy" Examples
 
@@ -177,6 +181,33 @@ Enabling the `paranoid_unsafe` feature will swap out a handful of unsafe `get_un
 
 -   When the `std` feature is enabled:
     -   `src/connection/impls/unixstream.rs`: An implementation of `UnixStream::peek` which uses `libc::recv`. This manual implementation will be removed once [rust-lang/rust#76923](https://github.com/rust-lang/rust/issues/76923) is stabilized.
+
+## Writing panic-free code
+
+Ideally, the Rust compiler would have some way to opt-in to a strict "no-panic" mode. Unfortunately, at the time of writing (2022/04/24), no such mode exists. As such, the only way to avoid the Rust compiler + stdlib's implicit panics is by being _very careful_ when writing code, and _manually checking_ that those panicking paths get optimized out!
+
+And when I say "manually checking", I actually mean "reading through [generated assembly](example_no_std/dump_asm.sh)".
+
+Why even go through this effort?
+
+- Panic infrastructure can be _expensive_, and when you're optimizing for embedded, `no_std` use-cases, panic infrastructure brings in hundreds of additional bytes into the final binary.
+- `gdbstub` can be used to implement low-level debuggers, and if the debugger itself panics, well... it's not like you can debug it all that easily!
+
+In conclusion, here is the `gdbstub` promise regarding panicking code:
+
+`gdbstub` will not introduce any additional panics into an existing binary, subject to the following conditions:
+
+1. The binary is compiled in _release_ mode
+    - Subject to the specific `rustc` version being used (as codegen and optimization can vary wildly between versions)
+    - _Note:_ different hardware architectures may be subject to different compiler optimizations.
+      - At this time, only `x86` has been confirmed panic-free
+2. `gdbstub`'s `paranoid_unsafe` cargo feature is _disabled_
+   - See the [`unsafe` in `gdbstub`](#unsafe-in-gdbstub) section for more details.
+3. The `Arch` implementation being used doesn't include panicking code
+   - _Note:_ The arch implementations under `gdbstub_arch` are _not_ guaranteed to be panic free!
+   - If you do spot a panicking arch in `gdbstub_arch`, consider opening a PR to fix it
+
+If you're using `gdbstub` in a no-panic project and found that `gdbstub` has introduced some panicking code, please file an issue!
 
 ## Future Plans + Roadmap to `1.0.0`
 

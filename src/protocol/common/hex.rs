@@ -54,6 +54,7 @@ pub enum DecodeHexBufError {
     NotAscii,
 }
 
+#[inline]
 fn ascii2byte(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -65,8 +66,9 @@ fn ascii2byte(c: u8) -> Option<u8> {
 }
 
 /// Check if the byte `c` is a valid GDB hex digit `[0-9a-fA-FxX]`
-#[allow(clippy::match_like_matches_macro)]
+#[inline]
 pub fn is_hex(c: u8) -> bool {
+    #[allow(clippy::match_like_matches_macro)] // mirror ascii2byte
     match c {
         b'0'..=b'9' => true,
         b'a'..=b'f' => true,
@@ -239,7 +241,8 @@ pub fn encode_hex_buf(buf: &mut [u8], start_idx: usize) -> Result<&mut [u8], Enc
         buf[i] = match nybble {
             0x0..=0x9 => b'0' + nybble,
             0xa..=0xf => b'A' + (nybble - 0xa),
-            _ => unreachable!(), // could be unreachable_unchecked...
+            #[allow(clippy::unreachable)] // will be optimized out
+            _ => unreachable!(), // TODO: use unreachable_unchecked?
         };
     }
 
