@@ -34,11 +34,11 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
         Ok(tid)
     }
 
-    pub(crate) fn handle_base<'a>(
+    pub(crate) fn handle_base(
         &mut self,
         res: &mut ResponseWriter<'_, C>,
         target: &mut T,
-        command: Base<'a>,
+        command: Base<'_>,
     ) -> Result<HandlerStatus, Error<T::Error, C::Error>> {
         let handler_status = match command {
             // ------------------ Handshaking and Queries ------------------- //
@@ -166,7 +166,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                     pid: self
                         .features
                         .multiprocess()
-                        .then(|| SpecificIdKind::WithId(FAKE_PID)),
+                        .then_some(SpecificIdKind::WithId(FAKE_PID)),
                     tid: SpecificIdKind::WithId(self.get_sane_any_tid(target)?),
                 })?;
                 res.write_str(";")?;
@@ -329,7 +329,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                         pid: self
                             .features
                             .multiprocess()
-                            .then(|| SpecificIdKind::WithId(FAKE_PID)),
+                            .then_some(SpecificIdKind::WithId(FAKE_PID)),
                         tid: SpecificIdKind::WithId(SINGLE_THREAD_TID),
                     })?,
                     BaseOps::MultiThread(ops) => {
@@ -346,7 +346,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                                     pid: self
                                         .features
                                         .multiprocess()
-                                        .then(|| SpecificIdKind::WithId(FAKE_PID)),
+                                        .then_some(SpecificIdKind::WithId(FAKE_PID)),
                                     tid: SpecificIdKind::WithId(tid),
                                 })?;
                                 Ok(())

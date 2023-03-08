@@ -14,11 +14,11 @@ use crate::FAKE_PID;
 use super::DisconnectReason;
 
 impl<T: Target, C: Connection> GdbStubImpl<T, C> {
-    pub(crate) fn handle_stop_resume<'a>(
+    pub(crate) fn handle_stop_resume(
         &mut self,
         res: &mut ResponseWriter<'_, C>,
         target: &mut T,
-        command: Resume<'a>,
+        command: Resume<'_>,
     ) -> Result<HandlerStatus, Error<T::Error, C::Error>> {
         let mut ops = match target.base_ops().resume_ops() {
             Some(ops) => ops,
@@ -272,7 +272,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                 pid: self
                     .features
                     .multiprocess()
-                    .then(|| SpecificIdKind::WithId(FAKE_PID)),
+                    .then_some(SpecificIdKind::WithId(FAKE_PID)),
                 tid: SpecificIdKind::WithId(tid),
             })?;
             res.write_str(";")?;
