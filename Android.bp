@@ -33,7 +33,7 @@ rust_library {
         "trace-pkt",
     ],
     rustlibs: [
-        "libbitflags-1.3.2",
+        "libbitflags",
         "libcfg_if",
         "liblog_rust",
         "libmanaged",
