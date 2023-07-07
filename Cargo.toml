@@ -12,7 +12,7 @@
 [package]
 edition = "2018"
 name = "gdbstub"
-version = "0.6.3"
+version = "0.6.4"
 authors = ["Daniel Prilik <danielprilik@gmail.com>"]
 exclude = [
     "examples/**/*.elf",
