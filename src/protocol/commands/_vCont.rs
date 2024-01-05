@@ -1,8 +1,8 @@
 use super::prelude::*;
-
 use crate::common::Signal;
 use crate::protocol::common::hex::HexString;
-use crate::protocol::common::thread_id::{SpecificThreadId, ThreadId};
+use crate::protocol::common::thread_id::SpecificThreadId;
+use crate::protocol::common::thread_id::ThreadId;
 
 // TODO?: instead of lazily parsing data, parse the strings into a compressed
 // binary representations that can be stuffed back into the packet buffer and
@@ -112,8 +112,8 @@ impl<'a> VContKind<'a> {
             [b'c'] => Continue,
             [b's'] => Step,
             [b't'] => Stop,
-            [b'C', sig @ ..] => ContinueWithSig(Signal::from_protocol_u8(decode_hex(sig).ok()?)),
-            [b'S', sig @ ..] => StepWithSig(Signal::from_protocol_u8(decode_hex(sig).ok()?)),
+            [b'C', sig @ ..] => ContinueWithSig(Signal(decode_hex(sig).ok()?)),
+            [b'S', sig @ ..] => StepWithSig(Signal(decode_hex(sig).ok()?)),
             [b'r', range @ ..] => {
                 let mut range = range.split(|b| *b == b',');
                 RangeStep(HexString(range.next()?), HexString(range.next()?))
