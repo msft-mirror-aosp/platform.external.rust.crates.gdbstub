@@ -2,16 +2,20 @@
 //! `arm-none-eabi-cc -march=armv4t`. It's not modeled after any real-world
 //! system.
 
-use std::net::{TcpListener, TcpStream};
-
-#[cfg(unix)]
-use std::os::unix::net::{UnixListener, UnixStream};
-
 use gdbstub::common::Signal;
-use gdbstub::conn::{Connection, ConnectionExt};
+use gdbstub::conn::Connection;
+use gdbstub::conn::ConnectionExt;
+use gdbstub::stub::run_blocking;
+use gdbstub::stub::DisconnectReason;
+use gdbstub::stub::GdbStub;
 use gdbstub::stub::SingleThreadStopReason;
-use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, GdbStubError};
 use gdbstub::target::Target;
+use std::net::TcpListener;
+use std::net::TcpStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 
 type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -177,11 +181,18 @@ fn main() -> DynResult<()> {
             }
             DisconnectReason::Kill => println!("GDB sent a kill command!"),
         },
-        Err(GdbStubError::TargetError(e)) => {
-            println!("target encountered a fatal error: {}", e)
-        }
         Err(e) => {
-            println!("gdbstub encountered a fatal error: {}", e)
+            if e.is_target_error() {
+                println!(
+                    "target encountered a fatal error: {}",
+                    e.into_target_error().unwrap()
+                )
+            } else if e.is_connection_error() {
+                let (e, kind) = e.into_connection_error().unwrap();
+                println!("connection error: {:?} - {}", kind, e,)
+            } else {
+                println!("gdbstub encountered a fatal error: {}", e)
+            }
         }
     }
 
