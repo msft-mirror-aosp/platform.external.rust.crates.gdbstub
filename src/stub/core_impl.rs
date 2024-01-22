@@ -1,12 +1,14 @@
-use core::marker::PhantomData;
-
-use crate::common::{Signal, Tid};
+use crate::common::Signal;
+use crate::common::Tid;
 use crate::conn::Connection;
 use crate::protocol::commands::Command;
-use crate::protocol::{Packet, ResponseWriter, SpecificIdKind};
-use crate::stub::GdbStubError as Error;
+use crate::protocol::Packet;
+use crate::protocol::ResponseWriter;
+use crate::protocol::SpecificIdKind;
+use crate::stub::error::InternalError;
 use crate::target::Target;
 use crate::SINGLE_THREAD_TID;
+use core::marker::PhantomData;
 
 /// Common imports used by >50% of all extensions.
 ///
@@ -16,8 +18,9 @@ mod prelude {
     pub(super) use crate::internal::BeBytes;
     pub(super) use crate::protocol::ResponseWriter;
     pub(super) use crate::stub::core_impl::target_result_ext::TargetResultExt;
-    pub(super) use crate::stub::core_impl::{GdbStubImpl, HandlerStatus};
-    pub(super) use crate::stub::error::GdbStubError as Error;
+    pub(super) use crate::stub::core_impl::GdbStubImpl;
+    pub(super) use crate::stub::core_impl::HandlerStatus;
+    pub(super) use crate::stub::error::InternalError as Error;
     pub(super) use crate::target::Target;
 }
 
@@ -31,6 +34,7 @@ mod host_io;
 mod lldb_register_info;
 mod memory_map;
 mod monitor_cmd;
+mod no_ack_mode;
 mod resume;
 mod reverse_exec;
 mod section_offsets;
@@ -42,7 +46,7 @@ mod x_upcase_packet;
 pub(crate) use resume::FinishExecStatus;
 
 pub(crate) mod target_result_ext {
-    use crate::stub::GdbStubError;
+    use crate::stub::error::InternalError;
     use crate::target::TargetError;
 
     /// Extension trait to ease working with `TargetResult` in the GdbStub
@@ -51,14 +55,14 @@ pub(crate) mod target_result_ext {
         /// Encapsulates the boilerplate associated with handling
         /// `TargetError`s, such as bailing-out on Fatal errors, or
         /// returning response codes.
-        fn handle_error(self) -> Result<V, GdbStubError<T, C>>;
+        fn handle_error(self) -> Result<V, InternalError<T, C>>;
     }
 
     impl<V, T, C> TargetResultExt<V, T, C> for Result<V, TargetError<T>> {
-        fn handle_error(self) -> Result<V, GdbStubError<T, C>> {
+        fn handle_error(self) -> Result<V, InternalError<T, C>> {
             let code = match self {
                 Ok(v) => return Ok(v),
-                Err(TargetError::Fatal(e)) => return Err(GdbStubError::TargetError(e)),
+                Err(TargetError::Fatal(e)) => return Err(InternalError::TargetError(e)),
                 // Recoverable errors:
                 // Error code 121 corresponds to `EREMOTEIO` lol
                 Err(TargetError::NonFatal) => 121,
@@ -67,7 +71,7 @@ pub(crate) mod target_result_ext {
                 Err(TargetError::Io(e)) => e.raw_os_error().unwrap_or(121) as u8,
             };
 
-            Err(GdbStubError::NonFatalError(code))
+            Err(InternalError::NonFatalError(code))
         }
     }
 }
@@ -92,7 +96,7 @@ pub enum State {
     Disconnect(DisconnectReason),
 }
 
-pub struct GdbStubImpl<T: Target, C: Connection> {
+pub(crate) struct GdbStubImpl<T: Target, C: Connection> {
     _target: PhantomData<T>,
     _connection: PhantomData<C>,
 
@@ -133,10 +137,10 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
         target: &mut T,
         conn: &mut C,
         packet: Packet<'_>,
-    ) -> Result<State, Error<T::Error, C::Error>> {
+    ) -> Result<State, InternalError<T::Error, C::Error>> {
         match packet {
             Packet::Ack => Ok(State::Pump),
-            Packet::Nack => Err(Error::ClientSentNack),
+            Packet::Nack => Err(InternalError::ClientSentNack),
             Packet::Interrupt => {
                 debug!("<-- interrupt packet");
                 Ok(State::CtrlCInterrupt)
@@ -144,7 +148,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
             Packet::Command(command) => {
                 // Acknowledge the command
                 if !self.features.no_ack_mode() {
-                    conn.write(b'+').map_err(Error::ConnectionWrite)?;
+                    conn.write(b'+').map_err(InternalError::conn_write)?;
                 }
 
                 let mut res = ResponseWriter::new(conn, target.use_rle());
@@ -158,7 +162,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                     Ok(HandlerStatus::Disconnect(reason)) => Some(reason),
                     // HACK: handling this "dummy" error is required as part of the
                     // `TargetResultExt::handle_error()` machinery.
-                    Err(Error::NonFatalError(code)) => {
+                    Err(InternalError::NonFatalError(code)) => {
                         res.write_str("E")?;
                         res.write_num(code)?;
                         None
@@ -188,12 +192,13 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
         res: &mut ResponseWriter<'_, C>,
         target: &mut T,
         cmd: Command<'_>,
-    ) -> Result<HandlerStatus, Error<T::Error, C::Error>> {
+    ) -> Result<HandlerStatus, InternalError<T::Error, C::Error>> {
         match cmd {
             // `handle_X` methods are defined in the `ext` module
             Command::Base(cmd) => self.handle_base(res, target, cmd),
             Command::TargetXml(cmd) => self.handle_target_xml(res, target, cmd),
             Command::Resume(cmd) => self.handle_stop_resume(res, target, cmd),
+            Command::NoAckMode(cmd) => self.handle_no_ack_mode(res, target, cmd),
             Command::XUpcasePacket(cmd) => self.handle_x_upcase_packet(res, target, cmd),
             Command::SingleRegisterAccess(cmd) => {
                 self.handle_single_register_access(res, target, cmd)
@@ -244,11 +249,15 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
     }
 }
 
+#[derive(Copy, Clone)]
+#[repr(transparent)]
+struct ProtocolFeatures(u8);
+
 // This bitflag is not part of the protocol - it is an internal implementation
 // detail. The alternative would be to use multiple `bool` fields, which wastes
 // space in minimal `gdbstub` configurations.
 bitflags::bitflags! {
-    struct ProtocolFeatures: u8 {
+    impl ProtocolFeatures: u8 {
         const NO_ACK_MODE = 1 << 0;
         const MULTIPROCESS = 1 << 1;
     }
