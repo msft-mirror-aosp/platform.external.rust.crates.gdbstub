@@ -1,9 +1,10 @@
+use crate::emu::Emu;
 use gdbstub::common::Pid;
 use gdbstub::target;
-use gdbstub::target::ext::extended_mode::{Args, AttachKind, ShouldTerminate};
+use gdbstub::target::ext::extended_mode::Args;
+use gdbstub::target::ext::extended_mode::AttachKind;
+use gdbstub::target::ext::extended_mode::ShouldTerminate;
 use gdbstub::target::TargetResult;
-
-use crate::emu::Emu;
 
 /*=====================================
 =            Extended Mode            =
@@ -31,8 +32,11 @@ impl target::ext::extended_mode::ExtendedMode for Emu {
     }
 
     fn attach(&mut self, pid: Pid) -> TargetResult<(), Self> {
-        eprintln!("GDB tried to attach to a process with PID {}", pid);
-        Err(().into()) // non-specific failure
+        eprintln!("GDB attached to a process with PID {}", pid);
+        // stub implementation: just report the same code, but running under a
+        // different pid.
+        self.reported_pid = pid;
+        Ok(())
     }
 
     fn run(&mut self, filename: Option<&[u8]>, args: Args<'_, '_>) -> TargetResult<Pid, Self> {
@@ -96,6 +100,13 @@ impl target::ext::extended_mode::ExtendedMode for Emu {
     ) -> Option<target::ext::extended_mode::ConfigureWorkingDirOps<'_, Self>> {
         Some(self)
     }
+
+    #[inline(always)]
+    fn support_current_active_pid(
+        &mut self,
+    ) -> Option<target::ext::extended_mode::CurrentActivePidOps<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl target::ext::extended_mode::ConfigureAslr for Emu {
@@ -156,5 +167,11 @@ impl target::ext::extended_mode::ConfigureWorkingDir for Emu {
         }
 
         Ok(())
+    }
+}
+
+impl target::ext::extended_mode::CurrentActivePid for Emu {
+    fn current_active_pid(&mut self) -> Result<Pid, Self::Error> {
+        Ok(self.reported_pid)
     }
 }
