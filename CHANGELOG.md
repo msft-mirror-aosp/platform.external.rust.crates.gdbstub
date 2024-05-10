@@ -2,6 +2,65 @@ All notable changes to this project will be documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+# 0.7.1
+
+#### New Protocol Extensions
+
+- `LibrariesSvr4` - List an SVR4 (System-V/Unix) target's libraries. [\#142](https://github.com/daniel5151/gdbstub/pull/142) ([alexcrichton](https://github.com/alexcrichton))
+
+# 0.7.0
+
+#### Breaking API Changes
+
+- `stub::GdbStubError` is now an opaque `struct` with a handful of methods to extract user-defined context (as opposed to being an `enum` that directly exposed all error internals to the user).
+  - _This change will enable future versions of `gdbstub` to fearlessly improve error messages and infrastructure without making semver breaking changes. See [\#112](https://github.com/daniel5151/gdbstub/pull/132) for more._
+- `common::Signal` is not longer an `enum`, and is instead a `struct` with a single `pub u8` field + a collection of associated constants.
+  - _As a result, yet another instance of `unsafe` could be removed from the codebase!_
+- `Arch` API:
+  - Entirely removed `single_step_behavior`. See [\#132](https://github.com/daniel5151/gdbstub/pull/132) for details and rationale
+- `Target` APIs:
+  - `SingleThreadBase`/`MultiThreadBase`
+    - `read_addrs` now returns a `usize` instead of a `()`, allowing implementations to report cases where only a subset of memory could be read. [\#115](https://github.com/daniel5151/gdbstub/pull/115) ([geigerzaehler](https://github.com/geigerzaehler))
+  - `HostIo`
+    - `bitflags` has been updated from `1.x` to `2.x`, affecting the type of `HostIoOpenFlags` and `HostIoOpenMode` [\#138](https://github.com/daniel5151/gdbstub/pull/138) ([qwandor](https://github.com/qwandor))
+
+#### Internal Improvements
+
+- Reformatted codebase with nightly rustfmt using `imports_granularity = "Item"`
+
+# 0.6.6
+
+#### New Features
+
+- `Target::use_no_ack_mode` - toggle support for for activating "no ack mode" [\#135](https://github.com/daniel5151/gdbstub/pull/135) ([bet4it](https://github.com/bet4it))
+
+# 0.6.5
+
+#### New Protocol Extensions
+
+- `ExtendedMode > CurrentActivePid` - Support reporting a non-default active PID [\#133](https://github.com/daniel5151/gdbstub/pull/129)
+  - Required to fix `vAttach` behavior (see Bugfixes section below)
+
+#### Bugfixes
+
+- Fix for targets with no active threads [\#127](https://github.com/daniel5151/gdbstub/pull/127) ([xobs](https://github.com/xobs))
+- Fix `vAttach` behavior when switching between multiple processes [\#129](https://github.com/daniel5151/gdbstub/pull/129) ([xobs](https://github.com/xobs)), and [\#133](https://github.com/daniel5151/gdbstub/pull/129)
+- Minor doc fixes
+
+# 0.6.4
+
+#### Bugfixes
+
+- Avoid truncating `X` packets that contain `:` and `,` as part of the payload. [\#121](https://github.com/daniel5151/gdbstub/pull/121) ([709924470](https://github.com/709924470))
+
+#### Internal Improvements
+
+- Various README tweaks
+- Remove some `unsafe` code
+- CI improvements
+  - Run no-panic checks on `example_no_std`
+  - Run CI on docs
+
 # 0.6.3
 
 #### New Features

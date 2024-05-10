@@ -1,18 +1,17 @@
-use paste::paste;
-
 use crate::protocol::packet::PacketBuf;
 use crate::target::Target;
+use paste::paste;
 
 /// Common imports used by >50% of all packet parsers.
 ///
 /// Do not clutter this prelude with types only used by a few packets.
-pub(self) mod prelude {
-    pub use core::convert::{TryFrom, TryInto};
-
+pub mod prelude {
     pub use crate::protocol::commands::ParseCommand;
-    pub use crate::protocol::common::hex::{decode_hex, decode_hex_buf};
+    pub use crate::protocol::common::hex::decode_hex;
+    pub use crate::protocol::common::hex::decode_hex_buf;
     pub use crate::protocol::packet::PacketBuf;
-    pub use crate::util::no_panic_iter::SliceExt;
+    pub use core::convert::TryFrom;
+    pub use core::convert::TryInto;
 }
 
 pub trait ParseCommand<'a>: Sized {
@@ -92,6 +91,7 @@ macro_rules! commands {
                     fn support_single_register_access(&mut self) -> Option<()>;
                     fn support_reverse_step(&mut self) -> Option<()>;
                     fn support_reverse_cont(&mut self) -> Option<()>;
+                    fn support_no_ack_mode(&mut self) -> Option<()>;
                     fn support_x_upcase_packet(&mut self) -> Option<()>;
                     fn support_thread_extra_info(&mut self) -> Option<()>;
                 }
@@ -115,7 +115,7 @@ macro_rules! commands {
 
                     fn support_lldb_register_info(&mut self) -> Option<()> {
                         use crate::arch::Arch;
-			            if self.use_lldb_register_info()
+                        if self.use_lldb_register_info()
                             && (T::Arch::lldb_register_info(usize::max_value()).is_some()
                                 || self.support_lldb_register_info_override().is_some())
                         {
@@ -123,7 +123,7 @@ macro_rules! commands {
                         } else {
                             None
                         }
-		    }
+                    }
 
                     fn support_resume(&mut self) -> Option<()> {
                         self.base_ops().resume_ops().map(drop)
@@ -155,6 +155,14 @@ macro_rules! commands {
 
                     fn support_x_upcase_packet(&mut self) -> Option<()> {
                         if self.use_x_upcase_packet() {
+                            Some(())
+                        } else {
+                            None
+                        }
+                    }
+
+                    fn support_no_ack_mode(&mut self) -> Option<()> {
+                        if self.use_no_ack_mode() {
                             Some(())
                         } else {
                             None
@@ -229,7 +237,6 @@ commands! {
         "M" => _m_upcase::M<'a>,
         "qAttached" => _qAttached::qAttached,
         "qfThreadInfo" => _qfThreadInfo::qfThreadInfo,
-        "QStartNoAckMode" => _QStartNoAckMode::QStartNoAckMode,
         "qsThreadInfo" => _qsThreadInfo::qsThreadInfo,
         "qSupported" => _qSupported::qSupported<'a>,
         "T" => _t_upcase::T,
@@ -250,6 +257,10 @@ commands! {
         "X" => _x_upcase::X<'a>,
     }
 
+    no_ack_mode {
+        "QStartNoAckMode" => _QStartNoAckMode::QStartNoAckMode,
+    }
+
     single_register_access use 'a {
         "p" => _p::p<'a>,
         "P" => _p_upcase::P<'a>,
@@ -257,6 +268,7 @@ commands! {
 
     extended_mode use 'a {
         "!" => exclamation_mark::ExclamationMark,
+        "qC" => _qC::qC,
         "QDisableRandomization" => _QDisableRandomization::QDisableRandomization,
         "QEnvironmentHexEncoded" => _QEnvironmentHexEncoded::QEnvironmentHexEncoded<'a>,
         "QEnvironmentReset" => _QEnvironmentReset::QEnvironmentReset,
@@ -317,5 +329,9 @@ commands! {
 
     lldb_register_info {
         "qRegisterInfo" => _qRegisterInfo::qRegisterInfo,
+    }
+
+    libraries_svr4 use 'a {
+        "qXfer:libraries-svr4:read" => _qXfer_libraries_svr4_read::qXferLibrariesSvr4Read<'a>,
     }
 }

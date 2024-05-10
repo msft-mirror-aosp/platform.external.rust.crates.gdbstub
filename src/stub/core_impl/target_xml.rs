@@ -1,7 +1,6 @@
 use super::prelude::*;
-use crate::protocol::commands::ext::TargetXml;
-
 use crate::arch::Arch;
+use crate::protocol::commands::ext::TargetXml;
 
 impl<T: Target, C: Connection> GdbStubImpl<T, C> {
     pub(crate) fn handle_target_xml(
@@ -30,12 +29,12 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                     let xml_len = xml.len();
 
                     let start = xml_len.min(cmd.offset as usize);
-                    let end = xml_len.min(cmd.offset as usize + cmd.length);
+                    let end = xml_len.min((cmd.offset as usize).saturating_add(cmd.length));
 
-                    // LLVM isn't smart enough to realize that `end` will always be greater than
-                    // `start`, and fails to elide the `slice_index_order_fail` check unless we
-                    // include this seemingly useless call to `max`.
-                    let data = &xml[start..end.max(start)];
+                    // LLVM isn't smart enough to realize that `start <= end`, and fails to elide a
+                    // `slice_end_index_len_fail` check unless we include this seemingly useless
+                    // call to `min`.
+                    let data = &xml[start.min(end)..end];
 
                     let n = data.len().min(cmd.buf.len());
                     cmd.buf[..n].copy_from_slice(&data[..n]);

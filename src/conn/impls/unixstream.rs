@@ -1,10 +1,7 @@
-use core::ffi::c_void;
-use std::io;
-use std::os::unix::io::AsRawFd;
-use std::os::unix::net::UnixStream;
-
 use crate::conn::Connection;
 use crate::conn::ConnectionExt;
+use std::io;
+use std::os::unix::net::UnixStream;
 
 // TODO: Remove PeekExt once rust-lang/rust#73761 is stabilized
 trait PeekExt {
@@ -12,8 +9,18 @@ trait PeekExt {
 }
 
 impl PeekExt for UnixStream {
+    #[cfg(feature = "paranoid_unsafe")]
+    #[allow(clippy::panic)]
+    fn peek(&self, _buf: &mut [u8]) -> io::Result<usize> {
+        panic!("cannot use `UnixStream::peek` with `paranoid_unsafe` until rust-lang/rust#73761 is stabilized");
+    }
+
+    #[cfg(not(feature = "paranoid_unsafe"))]
     #[allow(non_camel_case_types)]
     fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        use core::ffi::c_void;
+        use std::os::unix::io::AsRawFd;
+
         // Define some libc types inline (to avoid bringing in entire libc dep)
 
         // every platform supported by the libc crate uses c_int = i32

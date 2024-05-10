@@ -151,7 +151,7 @@
 //!         &mut self,
 //!         start_addr: u32,
 //!         data: &mut [u8],
-//!     ) -> TargetResult<(), Self> { todo!() }
+//!     ) -> TargetResult<usize, Self> { todo!() }
 //!
 //!     fn write_addrs(
 //!         &mut self,
@@ -251,7 +251,7 @@
 //! type is being used. e.g: on a 32-bit target, instead of cluttering up a
 //! method implementation with a parameter passed as `(addr: <Self::Arch as
 //! Arch>::Usize)`, just write `(addr: u32)` directly.
-use crate::arch::{Arch, SingleStepGdbBehavior};
+use crate::arch::Arch;
 
 pub mod ext;
 
@@ -321,7 +321,8 @@ pub enum TargetError<E> {
     /// A target-specific fatal error.
     ///
     /// **WARNING:** Returning this error will immediately terminate the GDB
-    /// debugging session, and return a top-level `GdbStubError::TargetError`!
+    /// debugging session, and return a
+    /// [`GdbStubError`](crate::stub::GdbStubError)!
     Fatal(E),
 }
 
@@ -409,7 +410,7 @@ pub trait Target {
     /// #       &mut self,
     /// #       start_addr: u32,
     /// #       data: &mut [u8],
-    /// #   ) -> TargetResult<(), Self> { todo!() }
+    /// #   ) -> TargetResult<usize, Self> { todo!() }
     /// #
     /// #   fn write_addrs(
     /// #       &mut self,
@@ -429,10 +430,6 @@ pub trait Target {
     /// Targets that wish to use the GDB client's implicit software breakpoint
     /// handler must explicitly **opt-in** to this somewhat surprising GDB
     /// feature by overriding this method to return `true`.
-    ///
-    /// If you are reading these docs after having encountered a
-    /// [`GdbStubError::ImplicitSwBreakpoints`] error, it's quite likely that
-    /// you'll want to implement explicit support for software breakpoints.
     ///
     /// # Context
     ///
@@ -483,51 +480,41 @@ pub trait Target {
     /// e.g: On targets without native support for hardware single-stepping,
     /// calling `stepi` in GDB will result in the GDB client setting a temporary
     /// breakpoint on the next instruction + resuming via `continue` instead.
-    ///
-    /// [`GdbStubError::ImplicitSwBreakpoints`]:
-    /// crate::stub::GdbStubError::ImplicitSwBreakpoints
     #[inline(always)]
     fn guard_rail_implicit_sw_breakpoints(&self) -> bool {
         false
     }
 
-    /// Override the arch-level value for [`Arch::single_step_gdb_behavior`].
+    /// Enable/disable support for activating "no ack mode".
     ///
-    /// If you are reading these docs after having encountered a
-    /// [`GdbStubError::SingleStepGdbBehavior`] error, you may need to either:
+    /// By default, this method returns `true`.
     ///
-    /// - implement support for single-step
-    /// - disable existing support for single step
-    /// - be a Good Citizen and perform a quick test to see what kind of
-    ///   behavior your Arch exhibits.
+    /// _Author's note:_ Unless you're using `gdbstub` with a truly unreliable
+    /// transport line (e.g: a noisy serial connection), it's best to support
+    /// "no ack mode", as it can substantially improve debugging latency.
     ///
-    /// # WARNING
+    /// **Warning:** `gdbstub` doesn't currently implement all necessary
+    /// features for running correctly over a unreliable transport! See issue
+    /// [\#137](https://github.com/daniel5151/gdbstub/issues/137) for details.
     ///
-    /// Unless you _really_ know what you're doing (e.g: working on a dynamic
-    /// target implementation, attempting to fix the underlying bug, etc...),
-    /// you should **not** override this method, and instead follow the advice
-    /// the error gives you.
+    /// # What is "No Ack Mode"?
     ///
-    /// Incorrectly setting this method may lead to "unexpected packet" runtime
-    /// errors!
+    /// From the [GDB RSP docs](https://sourceware.org/gdb/onlinedocs/gdb/Packet-Acknowledgment.html#Packet-Acknowledgment):
     ///
-    /// # Details
-    ///
-    /// This method provides an "escape hatch" for disabling a workaround for a
-    /// bug in the mainline GDB client implementation.
-    ///
-    /// To squelch all errors, this method can be set to return
-    /// [`SingleStepGdbBehavior::Optional`] (though as mentioned above - you
-    /// should only do so if you're sure that's the right behavior).
-    ///
-    /// For more information, see the documentation for
-    /// [`Arch::single_step_gdb_behavior`].
-    ///
-    /// [`GdbStubError::SingleStepGdbBehavior`]:
-    /// crate::stub::GdbStubError::SingleStepGdbBehavior
+    /// > By default, when either the host or the target machine receives a
+    /// > packet, the first response expected is an acknowledgment: either '+'
+    /// > (to indicate the package was received correctly) or '-' (to request
+    /// > retransmission). This mechanism allows the GDB remote protocol to
+    /// > operate over unreliable transport mechanisms, such as a serial line.
+    /// >
+    /// > In cases where the transport mechanism is itself reliable (such as a
+    /// > pipe or TCP connection), the '+'/'-' acknowledgments are redundant. It
+    /// > may be desirable to disable them in that case to reduce communication
+    /// > overhead, or for other reasons. This can be accomplished by means of
+    /// > the 'QStartNoAckMode' packet
     #[inline(always)]
-    fn guard_rail_single_step_gdb_behavior(&self) -> SingleStepGdbBehavior {
-        <Self::Arch as Arch>::single_step_gdb_behavior()
+    fn use_no_ack_mode(&self) -> bool {
+        true
     }
 
     /// Enable/disable using the more efficient `X` packet to write to target
@@ -689,6 +676,35 @@ pub trait Target {
     fn support_auxv(&mut self) -> Option<ext::auxv::AuxvOps<'_, Self>> {
         None
     }
+
+    /// Support for reading a list of libraries for SVR4 (System-V/Unix)
+    /// platforms.
+    #[inline(always)]
+    fn support_libraries_svr4(&mut self) -> Option<ext::libraries::LibrariesSvr4Ops<'_, Self>> {
+        None
+    }
+}
+
+macro_rules! __delegate {
+    (fn $op:ident(&mut $this:ident) $($sig:tt)*) => {
+        fn $op(&mut $this) $($sig)* {
+            (**$this).$op()
+        }
+    };
+
+    (fn $op:ident(&$this:ident) $($sig:tt)*) => {
+        fn $op(&$this) $($sig)* {
+            (**$this).$op()
+        }
+    }
+}
+
+macro_rules! __delegate_support {
+    ($ext:ident) => {
+        paste::paste! {
+            __delegate!(fn [<support_ $ext>](&mut self) -> Option<ext::$ext::[<$ext:camel Ops>]<'_, Self>>);
+        }
+    };
 }
 
 macro_rules! impl_dyn_target {
@@ -700,96 +716,28 @@ macro_rules! impl_dyn_target {
             type Arch = A;
             type Error = E;
 
-            fn base_ops(&mut self) -> ext::base::BaseOps<'_, Self::Arch, Self::Error> {
-                (**self).base_ops()
-            }
+            __delegate!(fn base_ops(&mut self) -> ext::base::BaseOps<'_, Self::Arch, Self::Error>);
 
-            fn guard_rail_implicit_sw_breakpoints(&self) -> bool {
-                (**self).guard_rail_implicit_sw_breakpoints()
-            }
+            __delegate!(fn guard_rail_implicit_sw_breakpoints(&self) -> bool);
 
-            fn guard_rail_single_step_gdb_behavior(&self) -> SingleStepGdbBehavior {
-                (**self).guard_rail_single_step_gdb_behavior()
-            }
+            __delegate!(fn use_no_ack_mode(&self) -> bool);
+            __delegate!(fn use_x_upcase_packet(&self) -> bool);
+            __delegate!(fn use_resume_stub(&self) -> bool);
+            __delegate!(fn use_rle(&self) -> bool);
+            __delegate!(fn use_target_description_xml(&self) -> bool);
+            __delegate!(fn use_lldb_register_info(&self) -> bool);
 
-            fn use_x_upcase_packet(&self) -> bool {
-                (**self).use_x_upcase_packet()
-            }
-
-            fn use_resume_stub(&self) -> bool {
-                (**self).use_resume_stub()
-            }
-
-            fn use_rle(&self) -> bool {
-                (**self).use_rle()
-            }
-
-            fn use_target_description_xml(&self) -> bool {
-                (**self).use_target_description_xml()
-            }
-
-            fn use_lldb_register_info(&self) -> bool {
-                (**self).use_lldb_register_info()
-            }
-
-            fn support_breakpoints(
-                &mut self,
-            ) -> Option<ext::breakpoints::BreakpointsOps<'_, Self>> {
-                (**self).support_breakpoints()
-            }
-
-            fn support_monitor_cmd(&mut self) -> Option<ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
-                (**self).support_monitor_cmd()
-            }
-
-            fn support_extended_mode(
-                &mut self,
-            ) -> Option<ext::extended_mode::ExtendedModeOps<'_, Self>> {
-                (**self).support_extended_mode()
-            }
-
-            fn support_section_offsets(
-                &mut self,
-            ) -> Option<ext::section_offsets::SectionOffsetsOps<'_, Self>> {
-                (**self).support_section_offsets()
-            }
-
-            fn support_target_description_xml_override(
-                &mut self,
-            ) -> Option<
-                ext::target_description_xml_override::TargetDescriptionXmlOverrideOps<'_, Self>,
-            > {
-                (**self).support_target_description_xml_override()
-            }
-
-            fn support_lldb_register_info_override(
-                &mut self,
-            ) -> Option<ext::lldb_register_info_override::LldbRegisterInfoOverrideOps<'_, Self>>
-            {
-                (**self).support_lldb_register_info_override()
-            }
-
-            fn support_memory_map(&mut self) -> Option<ext::memory_map::MemoryMapOps<'_, Self>> {
-                (**self).support_memory_map()
-            }
-
-            fn support_catch_syscalls(
-                &mut self,
-            ) -> Option<ext::catch_syscalls::CatchSyscallsOps<'_, Self>> {
-                (**self).support_catch_syscalls()
-            }
-
-            fn support_host_io(&mut self) -> Option<ext::host_io::HostIoOps<'_, Self>> {
-                (**self).support_host_io()
-            }
-
-            fn support_exec_file(&mut self) -> Option<ext::exec_file::ExecFileOps<'_, Self>> {
-                (**self).support_exec_file()
-            }
-
-            fn support_auxv(&mut self) -> Option<ext::auxv::AuxvOps<'_, Self>> {
-                (**self).support_auxv()
-            }
+            __delegate_support!(breakpoints);
+            __delegate_support!(monitor_cmd);
+            __delegate_support!(extended_mode);
+            __delegate_support!(section_offsets);
+            __delegate_support!(target_description_xml_override);
+            __delegate_support!(lldb_register_info_override);
+            __delegate_support!(memory_map);
+            __delegate_support!(catch_syscalls);
+            __delegate_support!(host_io);
+            __delegate_support!(exec_file);
+            __delegate_support!(auxv);
         }
     };
 }
