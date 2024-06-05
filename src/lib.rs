@@ -1,6 +1,6 @@
-//! An ergonomic and easy-to-integrate implementation of the
-//! [GDB Remote Serial Protocol](https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html#Remote-Protocol)
-//! in Rust, with full `#![no_std]` support.
+//! An ergonomic, featureful, and easy-to-integrate implementation of the [GDB
+//! Remote Serial Protocol](https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html#Remote-Protocol)
+//! in Rust, with no-compromises `#![no_std]` support.
 //!
 //! ## Feature flags
 //!
@@ -86,8 +86,8 @@
 //!
 //! ### The `Target` Trait
 //!
-//! The [`Target`](target::Target) trait describes how to control and modify
-//! a system's execution state during a GDB debugging session, and serves as the
+//! The [`Target`](target::Target) trait describes how to control and modify a
+//! system's execution state during a GDB debugging session, and serves as the
 //! primary bridge between `gdbstub`'s generic GDB protocol implementation and a
 //! specific target's project/platform-specific code.
 //!
@@ -169,7 +169,7 @@
 //! #
 //! use gdbstub::common::Signal;
 //! use gdbstub::conn::{Connection, ConnectionExt}; // note the use of `ConnectionExt`
-//! use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, GdbStubError};
+//! use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub};
 //! use gdbstub::stub::SingleThreadStopReason;
 //! use gdbstub::target::Target;
 //!
@@ -251,11 +251,18 @@
 //!             }
 //!             DisconnectReason::Kill => println!("GDB sent a kill command"),
 //!         },
-//!         Err(GdbStubError::TargetError(e)) => {
-//!             println!("target encountered a fatal error: {}", e)
-//!         }
 //!         Err(e) => {
-//!             println!("gdbstub encountered a fatal error: {}", e)
+//!             if e.is_target_error() {
+//!                 println!(
+//!                     "target encountered a fatal error: {}",
+//!                     e.into_target_error().unwrap()
+//!                 )
+//!             } else if e.is_connection_error() {
+//!                 let (e, kind) = e.into_connection_error().unwrap();
+//!                 println!("connection error: {:?} - {}", kind, e,)
+//!             } else {
+//!                 println!("gdbstub encountered a fatal error: {}", e)
+//!             }
 //!         }
 //!     }
 //! }
@@ -304,6 +311,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(feature = "paranoid_unsafe", forbid(unsafe_code))]
+#![warn(missing_docs)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -341,7 +349,8 @@ macro_rules! unwrap {
 
 /// (Internal) The fake Tid that's used when running in single-threaded mode.
 const SINGLE_THREAD_TID: common::Tid = unwrap!(common::Tid::new(1));
-/// (Internal) The fake Pid reported to GDB when running in multi-threaded mode.
+/// (Internal) The fake Pid reported to GDB when the target hasn't opted into
+/// reporting a custom Pid itself.
 const FAKE_PID: common::Pid = unwrap!(common::Pid::new(1));
 
 pub(crate) mod is_valid_tid {

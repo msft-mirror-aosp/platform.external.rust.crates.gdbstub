@@ -1,13 +1,16 @@
+use crate::emu::Emu;
+use crate::emu::ExecMode;
+use armv4t_emu::reg;
+use armv4t_emu::Memory;
 use core::convert::TryInto;
-
-use armv4t_emu::{reg, Memory};
 use gdbstub::common::Signal;
 use gdbstub::target;
-use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadResume};
-use gdbstub::target::{Target, TargetError, TargetResult};
+use gdbstub::target::ext::base::singlethread::SingleThreadBase;
+use gdbstub::target::ext::base::singlethread::SingleThreadResume;
+use gdbstub::target::Target;
+use gdbstub::target::TargetError;
+use gdbstub::target::TargetResult;
 use gdbstub_arch::arm::reg::id::ArmCoreRegId;
-
-use crate::emu::{Emu, ExecMode};
 
 // Additional GDB extensions
 
@@ -17,6 +20,7 @@ mod catch_syscalls;
 mod exec_file;
 mod extended_mode;
 mod host_io;
+mod libraries;
 mod lldb_register_info_override;
 mod memory_map;
 mod monitor_cmd;
@@ -150,6 +154,13 @@ impl Target for Emu {
     fn support_auxv(&mut self) -> Option<target::ext::auxv::AuxvOps<'_, Self>> {
         Some(self)
     }
+
+    #[inline(always)]
+    fn support_libraries_svr4(
+        &mut self,
+    ) -> Option<target::ext::libraries::LibrariesSvr4Ops<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl SingleThreadBase for Emu {
@@ -196,11 +207,22 @@ impl SingleThreadBase for Emu {
         Some(self)
     }
 
-    fn read_addrs(&mut self, start_addr: u32, data: &mut [u8]) -> TargetResult<(), Self> {
-        for (addr, val) in (start_addr..).zip(data.iter_mut()) {
+    fn read_addrs(&mut self, start_addr: u32, data: &mut [u8]) -> TargetResult<usize, Self> {
+        // These values are taken from the link script.
+        const MEMORY_ORIGIN: u32 = 0x5555_0000;
+        const MEMORY_LENGTH: u32 = 0x1000_0000;
+        const MEMORY_END: u32 = MEMORY_ORIGIN + MEMORY_LENGTH;
+
+        if !(MEMORY_ORIGIN..MEMORY_END).contains(&start_addr) {
+            return Err(TargetError::NonFatal);
+        }
+
+        let end_addr = std::cmp::min(start_addr + data.len() as u32, MEMORY_END);
+
+        for (addr, val) in (start_addr..end_addr).zip(data.iter_mut()) {
             *val = self.mem.r8(addr)
         }
-        Ok(())
+        Ok((end_addr - start_addr) as usize)
     }
 
     fn write_addrs(&mut self, start_addr: u32, data: &[u8]) -> TargetResult<(), Self> {
@@ -379,10 +401,14 @@ impl target::ext::base::singlethread::SingleThreadRangeStepping for Emu {
 
 mod custom_arch {
     use core::num::NonZeroUsize;
-
-    use gdbstub::arch::lldb::{Encoding, Format, Generic, Register, RegisterInfo};
-    use gdbstub::arch::{Arch, RegId, Registers, SingleStepGdbBehavior};
-
+    use gdbstub::arch::lldb::Encoding;
+    use gdbstub::arch::lldb::Format;
+    use gdbstub::arch::lldb::Generic;
+    use gdbstub::arch::lldb::Register;
+    use gdbstub::arch::lldb::RegisterInfo;
+    use gdbstub::arch::Arch;
+    use gdbstub::arch::RegId;
+    use gdbstub::arch::Registers;
     use gdbstub_arch::arm::reg::id::ArmCoreRegId;
     use gdbstub_arch::arm::reg::ArmCoreRegs;
     use gdbstub_arch::arm::ArmBreakpointKind;
@@ -589,14 +615,6 @@ mod custom_arch {
                     Some(RegisterInfo::Register(reg))
                 }
             }
-        }
-        // armv4t supports optional single stepping.
-        //
-        // notably, x86 is an example of an arch that does _not_ support
-        // optional single stepping.
-        #[inline(always)]
-        fn single_step_gdb_behavior() -> SingleStepGdbBehavior {
-            SingleStepGdbBehavior::Optional
         }
     }
 }

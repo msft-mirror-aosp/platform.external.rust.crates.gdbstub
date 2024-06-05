@@ -4,13 +4,13 @@
 [![](https://docs.rs/gdbstub/badge.svg)](https://docs.rs/gdbstub)
 [![](https://img.shields.io/badge/license-MIT%2FApache-blue.svg)](./LICENSE)
 
-An ergonomic and easy-to-integrate implementation of the [GDB Remote Serial Protocol](https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html#Remote-Protocol) in Rust, with full `#![no_std]` support.
+An ergonomic, featureful, and easy-to-integrate implementation of the [GDB Remote Serial Protocol](https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html#Remote-Protocol) in Rust, with _no-compromises_ `#![no_std]` support.
 
 `gdbstub`  makes it easy to integrate powerful guest debugging support to your emulator / hypervisor / debugger / embedded project. By implementing just a few basic methods of the [`gdbstub::Target`](https://docs.rs/gdbstub/latest/gdbstub/target/ext/base/singlethread/trait.SingleThreadBase.html) trait, you can have a rich GDB debugging session up and running in no time!
 
 `gdbstub`'s API makes extensive use of a technique called [**Inlineable Dyn Extension Traits**](#zero-overhead-protocol-extensions) (IDETs) to expose fine-grained, zero-cost control over enabled GDB protocol features _without_ relying on compile-time features flags. Aside from making it effortless to toggle enabled protocol features, IDETs also ensure that any unimplemented features are guaranteed to be dead-code-eliminated in release builds!
 
-**If you're looking for a quick snippet of example code to see what a typical `gdbstub` integration might look like, check out [examples/armv4t/gdb/mod.rs](https://github.com/daniel5151/gdbstub/blob/master/examples/armv4t/gdb/mod.rs)**
+**If you're looking for a quick snippet of example code to see what a featureful `gdbstub` integration might look like, check out [examples/armv4t/gdb/mod.rs](https://github.com/daniel5151/gdbstub/blob/master/examples/armv4t/gdb/mod.rs)**
 
 -   [Documentation (gdbstub)](https://docs.rs/gdbstub)
 -   [Documentation (gdbstub_arch)](https://docs.rs/gdbstub_arch)
@@ -88,6 +88,7 @@ Of course, most use-cases will want to support additional debugging features as 
     -   Can be used to automatically read the remote executable on attach (using `ExecFile`)
 -   Read auxiliary vector (`info auxv`)
 -   Extra thread info (`info threads`)
+-   Extra library information (`info sharedlibraries`)
 
 _Note:_ GDB features are implemented on an as-needed basis by `gdbstub`'s contributors. If there's a missing GDB feature that you'd like `gdbstub` to implement, please file an issue and/or open a PR!
 
@@ -134,8 +135,8 @@ If you end up using `gdbstub` in your project, consider opening a PR and adding 
     -   [Firecracker](https://firecracker-microvm.github.io/) - A lightweight VMM developed by AWS (feature is in [PR](https://github.com/firecracker-microvm/firecracker/pull/2333))
     -   [uhyve](https://github.com/hermitcore/uhyve) - A minimal hypervisor for [RustyHermit](https://github.com/hermitcore/rusty-hermit)
 -   OS Kernels (using `gdbstub` on `no_std`)
+    -   [`betrusted-io/xous-core`](https://github.com/betrusted-io/xous-core/blob/b471b604/kernel/src/debug/gdb.rs) - The Xous microkernel operating system
     -   [`vmware-labs/node-replicated-kernel`](https://github.com/vmware-labs/node-replicated-kernel/tree/4326704/kernel/src/arch/x86_64/gdb) - An (experimental) research OS kernel for x86-64 (amd64) machines
-    -   [`betrusted-io/xous-core`](https://github.com/betrusted-io/xous-core/blob/7d3d710/kernel/src/debug/gdb_server.rs) - The Xous microkernel operating system
 -   Emulators
     -   [solana_rbpf](https://github.com/solana-labs/rbpf) - VM and JIT compiler for eBPF programs
     -   [rustyboyadvance-ng](https://github.com/michelhe/rustboyadvance-ng/) - Nintendo Gameboy Advance emulator and debugger (ARMv4T)
@@ -178,8 +179,6 @@ The following list exhaustively documents all uses of `unsafe` in `gdbstub`:
   - Don't emit provably unreachable panics
     -   `src/protocol/packet.rs`: Method in `PacketBuf` that use index using stored sub-`Range<usize>` into the buffer
     -   `src/protocol/common/hex.rs`: `decode_hex_buf`
-  - Don't emit large `match`-arm LUT
-    - `src/common.rs`: Checked transmute of `u8` to `Signal`
 
 -   When the `std` feature is enabled:
     -   `src/connection/impls/unixstream.rs`: An implementation of `UnixStream::peek` which uses `libc::recv`. Will be removed once [rust-lang/rust#76923](https://github.com/rust-lang/rust/issues/76923) stabilizes this feature in the stdlib.
@@ -220,7 +219,7 @@ Not that this is _not_ an exhaustive list, and is subject to change.
 -   [ ] Allow fine-grained control over target features via the `Arch` trait ([\#12](https://github.com/daniel5151/gdbstub/issues/12))
 -   [ ] Implement GDB's various high-level operating modes:
     -   [x] Single/Multi Thread debugging
-    -   [ ] Multiprocess Debugging
+    -   [ ] Multiprocess Debugging ([\#124](https://github.com/daniel5151/gdbstub/issues/124)
         -   [ ] Requires adding a new `target::ext::base::multiprocess` API.
         -   _Note:_ `gdbstub` already implements multiprocess extensions "under-the-hood", and just hard-codes a fake PID, so this is mostly a matter of "putting in the work".
     -   [x] [Extended Mode](https://sourceware.org/gdb/current/onlinedocs/gdb/Connecting.html) (`target extended-remote`)
@@ -235,9 +234,7 @@ Additionally, while not _strict_ blockers to `1.0.0`, it would be good to explor
 -   [ ] How/if to support [LLDB extensions](https://raw.githubusercontent.com/llvm-mirror/lldb/master/docs/lldb-gdb-remote.txt) ([\#99](https://github.com/daniel5151/gdbstub/issues/99))
 -   [ ] Supporting multi-arch debugging via a single target
     -   e.g: debugging x86 and ARM processes on macOS
--   [ ] Proper handling of "nack" packets (for spotty connections)
-    - Responding with "nack" is easy - the client has to re-transmit the command
-    - Re-transmitting after receiving a "nack" might be a bit harder...
+-   [ ] Proper handling of "nack" packets (for spotty connections) ([\#137](https://github.com/daniel5151/gdbstub/issues/137))
 
 ## License
 

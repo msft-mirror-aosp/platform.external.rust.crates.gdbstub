@@ -1,19 +1,18 @@
-// use super::prelude::*; // unused
 use crate::protocol::common::qxfer::ParseAnnex;
 use crate::protocol::common::qxfer::QXferReadBase;
 
-pub type qXferAuxvRead<'a> = QXferReadBase<'a, AuxvAnnex>;
+pub type qXferLibrariesSvr4Read<'a> = QXferReadBase<'a, LibrariesSvr4Annex>;
 
 #[derive(Debug)]
-pub struct AuxvAnnex;
+pub struct LibrariesSvr4Annex;
 
-impl<'a> ParseAnnex<'a> for AuxvAnnex {
+impl<'a> ParseAnnex<'a> for LibrariesSvr4Annex {
     #[inline(always)]
     fn from_buf(buf: &[u8]) -> Option<Self> {
         if buf != b"" {
             return None;
         }
 
-        Some(AuxvAnnex)
+        Some(LibrariesSvr4Annex)
     }
 }

@@ -1,17 +1,16 @@
 use super::prelude::*;
-use crate::protocol::commands::ext::Resume;
-
+use super::DisconnectReason;
 use crate::arch::Arch;
-use crate::common::{Signal, Tid};
+use crate::common::Signal;
+use crate::common::Tid;
 use crate::protocol::commands::_vCont::Actions;
-use crate::protocol::{SpecificIdKind, SpecificThreadId};
+use crate::protocol::commands::ext::Resume;
+use crate::protocol::SpecificIdKind;
+use crate::protocol::SpecificThreadId;
 use crate::stub::MultiThreadStopReason;
 use crate::target::ext::base::reverse_exec::ReplayLogPosition;
 use crate::target::ext::base::ResumeOps;
 use crate::target::ext::catch_syscalls::CatchSyscallPosition;
-use crate::FAKE_PID;
-
-use super::DisconnectReason;
 
 impl<T: Target, C: Connection> GdbStubImpl<T, C> {
     pub(crate) fn handle_stop_resume(
@@ -230,8 +229,16 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                 // TODO: update this case when non-stop mode is implemented
                 VContKind::Stop => return Err(Error::PacketUnexpected),
 
+                // GDB doesn't always respect `vCont?` responses that omit `;s;S`, and will try to
+                // send step packets regardless. Inform the user of this bug by issuing a
+                // `UnexpectedStepPacket` error, which is more useful than a generic
+                // `PacketUnexpected` error.
+                VContKind::Step | VContKind::StepWithSig(..) => {
+                    return Err(Error::UnexpectedStepPacket)
+                }
+
                 // Instead of using `_ =>`, explicitly list out any remaining unguarded cases.
-                VContKind::RangeStep(..) | VContKind::Step | VContKind::StepWithSig(..) => {
+                VContKind::RangeStep(..) => {
                     error!("GDB client sent resume action not reported by `vCont?`");
                     return Err(Error::PacketUnexpected);
                 }
@@ -257,11 +264,12 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
     fn write_stop_common(
         &mut self,
         res: &mut ResponseWriter<'_, C>,
+        target: &mut T,
         tid: Option<Tid>,
         signal: Signal,
     ) -> Result<(), Error<T::Error, C::Error>> {
         res.write_str("T")?;
-        res.write_num(signal as u8)?;
+        res.write_num(signal.0)?;
 
         if let Some(tid) = tid {
             self.current_mem_tid = tid;
@@ -272,7 +280,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
                 pid: self
                     .features
                     .multiprocess()
-                    .then_some(SpecificIdKind::WithId(FAKE_PID)),
+                    .then_some(SpecificIdKind::WithId(self.get_current_pid(target)?)),
                 tid: SpecificIdKind::WithId(tid),
             })?;
             res.write_str(";")?;
@@ -326,12 +334,12 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
         let status = match stop_reason {
             MultiThreadStopReason::DoneStep => {
                 res.write_str("S")?;
-                res.write_num(Signal::SIGTRAP as u8)?;
+                res.write_num(Signal::SIGTRAP.0)?;
                 FinishExecStatus::Handled
             }
             MultiThreadStopReason::Signal(sig) => {
                 res.write_str("S")?;
-                res.write_num(sig as u8)?;
+                res.write_num(sig.0)?;
                 FinishExecStatus::Handled
             }
             MultiThreadStopReason::Exited(code) => {
@@ -341,24 +349,24 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
             }
             MultiThreadStopReason::Terminated(sig) => {
                 res.write_str("X")?;
-                res.write_num(sig as u8)?;
+                res.write_num(sig.0)?;
                 FinishExecStatus::Disconnect(DisconnectReason::TargetTerminated(sig))
             }
             MultiThreadStopReason::SignalWithThread { tid, signal } => {
-                self.write_stop_common(res, Some(tid), signal)?;
+                self.write_stop_common(res, target, Some(tid), signal)?;
                 FinishExecStatus::Handled
             }
             MultiThreadStopReason::SwBreak(tid) if guard_break!(support_sw_breakpoint) => {
                 crate::__dead_code_marker!("sw_breakpoint", "stop_reason");
 
-                self.write_stop_common(res, Some(tid), Signal::SIGTRAP)?;
+                self.write_stop_common(res, target, Some(tid), Signal::SIGTRAP)?;
                 res.write_str("swbreak:;")?;
                 FinishExecStatus::Handled
             }
             MultiThreadStopReason::HwBreak(tid) if guard_break!(support_hw_breakpoint) => {
                 crate::__dead_code_marker!("hw_breakpoint", "stop_reason");
 
-                self.write_stop_common(res, Some(tid), Signal::SIGTRAP)?;
+                self.write_stop_common(res, target, Some(tid), Signal::SIGTRAP)?;
                 res.write_str("hwbreak:;")?;
                 FinishExecStatus::Handled
             }
@@ -367,7 +375,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
             {
                 crate::__dead_code_marker!("hw_watchpoint", "stop_reason");
 
-                self.write_stop_common(res, Some(tid), Signal::SIGTRAP)?;
+                self.write_stop_common(res, target, Some(tid), Signal::SIGTRAP)?;
 
                 use crate::target::ext::breakpoints::WatchKind;
                 match kind {
@@ -382,7 +390,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
             MultiThreadStopReason::ReplayLog { tid, pos } if guard_reverse_exec!() => {
                 crate::__dead_code_marker!("reverse_exec", "stop_reason");
 
-                self.write_stop_common(res, tid, Signal::SIGTRAP)?;
+                self.write_stop_common(res, target, tid, Signal::SIGTRAP)?;
 
                 res.write_str("replaylog:")?;
                 res.write_str(match pos {
@@ -400,7 +408,7 @@ impl<T: Target, C: Connection> GdbStubImpl<T, C> {
             } if guard_catch_syscall!() => {
                 crate::__dead_code_marker!("catch_syscall", "stop_reason");
 
-                self.write_stop_common(res, tid, Signal::SIGTRAP)?;
+                self.write_stop_common(res, target, tid, Signal::SIGTRAP)?;
 
                 res.write_str(match position {
                     CatchSyscallPosition::Entry => "syscall_entry:",

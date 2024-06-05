@@ -1,10 +1,14 @@
 //! The core [`GdbStub`] type, used to drive a GDB debugging session for a
 //! particular [`Target`] over a given [`Connection`].
 
-use managed::ManagedSlice;
-
-use crate::conn::{Connection, ConnectionExt};
-use crate::target::Target;
+pub use builder::GdbStubBuilder;
+pub use builder::GdbStubBuilderError;
+pub use core_impl::DisconnectReason;
+pub use error::GdbStubError;
+pub use stop_reason::BaseStopReason;
+pub use stop_reason::IntoStopReason;
+pub use stop_reason::MultiThreadStopReason;
+pub use stop_reason::SingleThreadStopReason;
 
 mod builder;
 mod core_impl;
@@ -13,19 +17,15 @@ mod stop_reason;
 
 pub mod state_machine;
 
-pub use builder::{GdbStubBuilder, GdbStubBuilderError};
-pub use core_impl::DisconnectReason;
-pub use error::GdbStubError;
-pub use stop_reason::{
-    BaseStopReason, IntoStopReason, MultiThreadStopReason, SingleThreadStopReason,
-};
-
-use GdbStubError as Error;
+use self::error::InternalError;
+use crate::conn::Connection;
+use crate::conn::ConnectionExt;
+use crate::target::Target;
+use managed::ManagedSlice;
 
 /// Types and traits related to the [`GdbStub::run_blocking`] interface.
 pub mod run_blocking {
     use super::*;
-
     use crate::conn::ConnectionExt;
 
     /// A set of user-provided methods required to run a GDB debugging session
@@ -157,7 +157,7 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
     pub fn run_blocking<E>(
         self,
         target: &mut T,
-    ) -> Result<DisconnectReason, Error<T::Error, C::Error>>
+    ) -> Result<DisconnectReason, GdbStubError<T::Error, C::Error>>
     where
         C: ConnectionExt,
         E: run_blocking::BlockingEventLoop<Target = T, Connection = C>,
@@ -167,7 +167,7 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
             gdb = match gdb {
                 state_machine::GdbStubStateMachine::Idle(mut gdb) => {
                     // needs more data, so perform a blocking read on the connection
-                    let byte = gdb.borrow_conn().read().map_err(Error::ConnectionRead)?;
+                    let byte = gdb.borrow_conn().read().map_err(InternalError::conn_read)?;
                     gdb.incoming_data(target, byte)?
                 }
 
@@ -179,12 +179,14 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
 
                 state_machine::GdbStubStateMachine::CtrlCInterrupt(gdb) => {
                     // defer to the implementation on how it wants to handle the interrupt
-                    let stop_reason = E::on_interrupt(target).map_err(Error::TargetError)?;
+                    let stop_reason =
+                        E::on_interrupt(target).map_err(InternalError::TargetError)?;
                     gdb.interrupt_handled(target, stop_reason)?
                 }
 
                 state_machine::GdbStubStateMachine::Running(mut gdb) => {
-                    use run_blocking::{Event as BlockingEventLoopEvent, WaitForStopReasonError};
+                    use run_blocking::Event as BlockingEventLoopEvent;
+                    use run_blocking::WaitForStopReasonError;
 
                     // block waiting for the target to return a stop reason
                     let event = E::wait_for_stop_reason(target, gdb.borrow_conn());
@@ -198,10 +200,10 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
                         }
 
                         Err(WaitForStopReasonError::Target(e)) => {
-                            break Err(Error::TargetError(e));
+                            break Err(InternalError::TargetError(e).into());
                         }
                         Err(WaitForStopReasonError::Connection(e)) => {
-                            break Err(Error::ConnectionRead(e));
+                            break Err(InternalError::conn_read(e).into());
                         }
                     }
                 }
@@ -216,7 +218,8 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
     pub fn run_state_machine(
         mut self,
         target: &mut T,
-    ) -> Result<state_machine::GdbStubStateMachine<'a, T, C>, Error<T::Error, C::Error>> {
+    ) -> Result<state_machine::GdbStubStateMachine<'a, T, C>, GdbStubError<T::Error, C::Error>>
+    {
         // Check if the target hasn't explicitly opted into implicit sw breakpoints
         {
             let support_software_breakpoints = target
@@ -225,33 +228,7 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
                 .unwrap_or(false);
 
             if !support_software_breakpoints && !target.guard_rail_implicit_sw_breakpoints() {
-                return Err(Error::ImplicitSwBreakpoints);
-            }
-        }
-
-        // Check how the target's arch handles single stepping
-        {
-            use crate::arch::SingleStepGdbBehavior;
-            use crate::target::ext::base::ResumeOps;
-
-            if let Some(ops) = target.base_ops().resume_ops() {
-                let support_single_step = match ops {
-                    ResumeOps::SingleThread(ops) => ops.support_single_step().is_some(),
-                    ResumeOps::MultiThread(ops) => ops.support_single_step().is_some(),
-                };
-
-                let behavior = target.guard_rail_single_step_gdb_behavior();
-
-                let return_error = match behavior {
-                    SingleStepGdbBehavior::Optional => false,
-                    SingleStepGdbBehavior::Required => !support_single_step,
-                    SingleStepGdbBehavior::Ignored => support_single_step,
-                    SingleStepGdbBehavior::Unknown => true,
-                };
-
-                if return_error {
-                    return Err(Error::SingleStepGdbBehavior(behavior));
-                }
+                return Err(InternalError::ImplicitSwBreakpoints.into());
             }
         }
 
@@ -259,7 +236,7 @@ impl<'a, T: Target, C: Connection> GdbStub<'a, T, C> {
         {
             self.conn
                 .on_session_start()
-                .map_err(Error::ConnectionInit)?;
+                .map_err(InternalError::conn_init)?;
         }
 
         Ok(state_machine::GdbStubStateMachineInner::from_plain_gdbstub(self).into())
